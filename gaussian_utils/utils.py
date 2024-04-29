@@ -3,7 +3,35 @@ import datetime
 import torch
 import numpy as np
 
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Union
+
+@dataclass
+class GradientDescentParams:
+	lr             :float
+	eps            :float
+	max_epochs     :int
+	min_improvement:float
+	patience       :int
+
+class RequiresGrad:
+	def __init__(self, *tensors):
+		self.tensors = tensors
+
+	def __enter__(self):
+		for t in self.tensors:
+			t.requires_grad_(True)
+		return self
+
+	def __exit__(self, *_):
+		for t in self.tensors:
+			t.requires_grad_(False)
+
+class ICloudTransformer(ABC):
+	@abstractmethod
+	def transform_cloud(self, cloud:torch.Tensor, particles:torch.Tensor) -> torch.Tensor:
+		raise NotImplementedError()
 
 def quat_conj(q: torch.Tensor):
 	assert q.shape[-1] == 4

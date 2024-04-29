@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.cluster import BisectingKMeans
 
 from .ops import rot_scale_3d, nearest_center_3d, nearest_gaussian_3d, indexed_transform_3d
-from .utils import quat_conj
+from .utils import GradientDescentParams, RequiresGrad, ICloudTransformer, quat_conj
 
 from typing import Union
 
@@ -13,20 +13,26 @@ class GaussianModel:
 		max_clusters:int=100,
 		disc_thickness:float=0.15,
 		mahal_thresh:float=2.0,
-		fit_lr:float=0.05,
-		fit_eps:float=1e-15,
-		fit_max_epochs:int=1000,
-		fit_min_improvement:float=1e-4,
-		fit_patience:int=50
+		fit_params:GradientDescentParams=GradientDescentParams(
+			lr=0.05,
+			eps=1e-15,
+			max_epochs=1000,
+			min_improvement=1e-4,
+			patience=50
+		),
+		register_params:GradientDescentParams=GradientDescentParams(
+			lr=0.1,
+			eps=1e-15,
+			max_epochs=200,
+			min_improvement=0.0,
+			patience=10
+		)
 	):
 		self.max_clusters = max_clusters
 		self.log_disc_thickness = float(np.log(disc_thickness))
 		self.mahal2_thresh = mahal_thresh*mahal_thresh
-		self.fit_lr = fit_lr
-		self.fit_eps = fit_eps
-		self.fit_max_epochs = fit_max_epochs
-		self.fit_min_improvement = fit_min_improvement
-		self.fit_patience = fit_patience
+		self._fit = fit_params
+		self._reg = register_params
 		self.clear()
 
 	@property
@@ -58,14 +64,14 @@ class GaussianModel:
 	def inverse_matrices(self) -> torch.Tensor:
 		return rot_scale_3d(self.inverse_scales, self.inverse_quats, scale_first=False)
 
-	def add_cloud(self, cloud:Union[np.array,torch.Tensor]) -> None:
-		if type(cloud) is np.array:
+	def add_cloud(self, cloud:Union[np.ndarray,torch.Tensor]) -> None:
+		if type(cloud) is np.ndarray:
 			cl_to_bisect = cloud
 			cloud = torch.as_tensor(cloud, dtype=torch.float32, device='cuda')
 		elif type(cloud) is torch.Tensor:
 			cl_to_bisect = cloud.cpu().numpy()
 		else:
-			raise TypeError('cloud must be np.array or torch.Tensor')
+			raise TypeError('cloud must be np.ndarray or torch.Tensor')
 
 		new_centers = BisectingKMeans(n_clusters=self.max_clusters, random_state=3135134162).fit(cl_to_bisect).cluster_centers_
 		new_centers = torch.as_tensor(new_centers, dtype=torch.float32, device='cuda')
@@ -103,7 +109,7 @@ class GaussianModel:
 
 		self._fit_gaussians(cloud, train_centers, train_log_scales, train_quats)
 
-		if self.is_empty:
+		if True or self.is_empty:
 			self.centers    = train_centers
 			self.log_scales = train_log_scales
 			self.quats      = train_quats
@@ -121,9 +127,9 @@ class GaussianModel:
 		best_epoch = None
 
 		with RequiresGrad(g_centers, g_log_scales, g_quats) as rg:
-			opt = torch.optim.Adam(rg.tensors, lr=self.fit_lr, eps=self.fit_eps)
+			opt = torch.optim.Adam(rg.tensors, lr=self._fit.lr, eps=self._fit.eps)
 
-			for epoch in range(self.fit_max_epochs):
+			for epoch in range(self._fit.max_epochs):
 				# Parametrize
 				g_invmats = rot_scale_3d(torch.exp(-g_log_scales), torch.nn.functional.normalize(g_quats), scale_first=False)
 
@@ -142,19 +148,19 @@ class GaussianModel:
 
 				#print(f'Epoch {1+epoch} L={float(L):.4f}')
 
+				if best_epoch is None or best_loss > float(L) + self._fit.min_improvement:
+					best_epoch = epoch
+					best_loss = float(L)
+					best_weights = (g_centers.detach().clone(), g_log_scales.detach().clone(), g_quats.detach().clone())
+				elif (epoch - best_epoch) > self._fit.patience:
+					#print('Early stopping')
+					break
+
 				opt.zero_grad()
 				L.backward()
 				opt.step()
 
-				if best_epoch is None or best_loss > float(L) + self.fit_min_improvement:
-					best_epoch = epoch
-					best_loss = float(L)
-					best_weights = (g_centers.detach().clone(), g_log_scales.detach().clone(), g_quats.detach().clone())
-				elif (epoch - best_epoch) > self.fit_patience:
-					#print('Early stopping')
-					break
-
-		print(f'Gaussian fitting ended, loss = {best_loss:.4f}')
+		#print(f'Gaussian fitting ended, loss = {best_loss:.4f}')
 
 		# Restore best weights
 		g_centers[:] = best_weights[0]
@@ -162,15 +168,38 @@ class GaussianModel:
 		g_quats[:] = -torch.nn.functional.normalize(best_weights[2])
 		g_quats[:,0] *= -1
 
-class RequiresGrad:
-	def __init__(self, *tensors):
-		self.tensors = tensors
+	def register(self, cloud:Union[np.ndarray,torch.Tensor], swarm:Union[np.ndarray,torch.Tensor], xfrm:ICloudTransformer) -> torch.Tensor:
+		cloud = torch.as_tensor(cloud, dtype=torch.float32, device='cuda')
+		swarm = torch.as_tensor(swarm, dtype=torch.float32, device='cuda')
 
-	def __enter__(self):
-		for t in self.tensors:
-			t.requires_grad_(True)
-		return self
+		g_invmat = self.inverse_matrices
 
-	def __exit__(self, *_):
-		for t in self.tensors:
-			t.requires_grad_(False)
+		best_epoch, best_L, best_particle = None, None, None
+
+		with RequiresGrad(swarm) as rg:
+			opt = torch.optim.Adam(rg.tensors, lr=self._reg.lr, eps=self._reg.eps)
+
+			for epoch in range(self._reg.max_epochs):
+				cl_reg = xfrm.transform_cloud(cloud, swarm)
+
+				cl_sqmahal, _ = nearest_gaussian_3d(cl_reg.reshape(-1,3), self.centers, g_invmat)
+				cl_sqmahal = cl_sqmahal.reshape(swarm.shape[0], -1)
+
+				L_batch = torch.mean(cl_sqmahal, dim=-1)
+				L, particleid = torch.min(L_batch.detach(), dim=0)
+
+				#print(f'  Epoch {1+epoch} loss={float(L):.4f} particle={particleid}')
+
+				if best_epoch is None or best_L > float(L) + self._reg.min_improvement:
+					best_epoch = epoch
+					best_L = float(L)
+					best_particle = swarm.detach()[None, particleid]
+				elif (epoch - best_epoch) > self._reg.patience:
+					#print('Early stopping')
+					break
+
+				opt.zero_grad()
+				torch.sum(L_batch).backward()
+				opt.step()
+
+		return best_particle
