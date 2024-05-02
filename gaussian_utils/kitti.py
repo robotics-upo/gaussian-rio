@@ -1,5 +1,9 @@
 import datetime
 import numpy as np
+import cv2
+
+def load_kitti_cam(basedir, id, which=2):
+	return cv2.imread(f'{basedir}/../image_{which:02d}/data/{id:010d}.png')[...,::-1]
 
 def load_kitti_file(basedir, id, remove_floor=True):
 	cl = np.fromfile(f'{basedir}/data/{id:010d}.bin', dtype=np.float32)
