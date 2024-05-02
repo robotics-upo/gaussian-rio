@@ -193,7 +193,7 @@ class GaussianModel:
 				if best_epoch is None or best_L > float(L) + self._reg.min_improvement:
 					best_epoch = epoch
 					best_L = float(L)
-					best_particle = swarm.detach()[None, particleid]
+					best_particle = swarm.detach()[None, particleid].clone()
 				elif (epoch - best_epoch) > self._reg.patience:
 					#print('Early stopping')
 					break
