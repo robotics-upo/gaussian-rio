@@ -74,6 +74,12 @@ def mat_to_quat(mat: np.array):
 	q = np.stack([w,x,y,z], axis=-1)
 	return q / np.linalg.norm(q)
 
+def quat_to_z(quat: np.array):
+	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
+	siny_cosp = 2*(qw*qz + qx*qy)
+	cosy_cosp = 1 - 2*(qy*qy + qz*qz)
+	return np.arctan2(siny_cosp, cosy_cosp)
+
 def crop_cloud(cl: np.array, mindist:int=3, maxdist:int=15):
 	cldist = np.linalg.norm(cl[:,0:2], axis=1)
 	return cl[(mindist <= cldist) & (cldist <= maxdist), :]
