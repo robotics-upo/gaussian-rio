@@ -15,6 +15,12 @@ class GradientDescentParams:
 	min_improvement:float
 	patience       :int
 
+@dataclass
+class RobotModelParams:
+	init_vel_std :float
+	accel_std    :float
+	angvel_std   :float
+
 class RequiresGrad:
 	def __init__(self, *tensors):
 		self.tensors = tensors
