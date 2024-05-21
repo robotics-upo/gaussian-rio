@@ -47,7 +47,7 @@ def load_kitti_odom_calib(basedir, seqid):
 			calib[key] = value
 	return calib
 
-def load_kitti_odom_gt(basedir, seqid, T_cam0_velodyne:np.ndarray=None, basescan:int=None):
+def load_kitti_odom_gt(basedir, seqid, T_cam0_velodyne:np.ndarray=None, basescan:int=None, raw_matrices:bool=False):
 	# Load poses and expand 3x4 to 4x4
 	mat = np.loadtxt(f'{basedir}/poses/{seqid:02d}.txt', dtype=np.float32).reshape((-1, 3, 4))
 	lastrow = np.array([0,0,0,1], dtype=np.float32)[None,None,:].repeat(len(mat), axis=0)
@@ -61,6 +61,10 @@ def load_kitti_odom_gt(basedir, seqid, T_cam0_velodyne:np.ndarray=None, basescan
 	# Use given base scan as origin
 	if basescan is not None:
 		mat = np.linalg.inv(mat[None,basescan]) @ mat
+
+	# Return raw matrices if requested
+	if raw_matrices:
+		return mat
 
 	# Extract translation vector and 3x3 rotation submatrix
 	xlate = mat[:,0:3,3]

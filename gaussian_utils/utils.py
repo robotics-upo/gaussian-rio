@@ -21,6 +21,14 @@ class RobotModelParams:
 	accel_std    :float
 	angvel_std   :float
 
+@dataclass
+class RobotModelParams3D:
+	init_vel_std :float
+	xy_accel_std :float
+	z_accel_std  :float
+	n_vel_std    :float
+	angvel_std   :float
+
 class RequiresGrad:
 	def __init__(self, *tensors):
 		self.tensors = tensors
@@ -79,6 +87,28 @@ def mat_to_quat(mat: np.array):
 			w = 1 + tx + ty + tz
 	q = np.stack([w,x,y,z], axis=-1)
 	return q / np.linalg.norm(q)
+
+def mat_to_zrot_normal(mat: np.array):
+	xlate = mat[...,0:3,3]
+	normals = mat[...,0:3,2]
+	normals = normals[...,0:2] / normals[...,2,None]
+	zrot = np.arctan2(mat[...,1,0], mat[...,0,0])
+	return xlate, zrot, normals
+
+def nzrot_to_mat(nzrot: torch.Tensor):
+	z_axis = torch.nn.functional.pad(nzrot[...,0:2], (0, 1), value=1.0)[...,None,:]
+	z_axis = z_axis / torch.linalg.norm(z_axis, dim=-1)[...,None]
+
+	r_angle = nzrot[...,2]
+	r_cos = torch.cos(r_angle)
+	r_sin = -torch.sin(r_angle) # Transpose
+	r_zero = torch.zeros_like(r_cos)
+	x_axis = torch.stack([r_cos, r_sin, r_zero], dim=-1)[...,None,:]
+
+	y_axis = torch.linalg.cross(z_axis, x_axis)
+	x_axis = torch.linalg.cross(y_axis, z_axis)
+
+	return torch.concat([x_axis, y_axis, z_axis], dim=-2)
 
 def quat_to_z(quat: np.array):
 	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
