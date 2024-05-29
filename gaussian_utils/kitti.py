@@ -21,11 +21,11 @@ def load_kitti_timestamps(basedir, which='timestamps'):
 			ts.append(datetime.datetime.strptime(line[:-4], '%Y-%m-%d %H:%M:%S.%f').timestamp())
 	return ts
 
-def load_kitti_odom(basedir, seqid, id, remove_floor=True):
+def load_kitti_odom(basedir, seqid, id, remove_floor=False):
 	cl = np.fromfile(f'{basedir}/sequences/{seqid:02d}/velodyne/{id:06d}.bin', dtype=np.float32)
 	cl = cl.reshape((-1,4))[:,0:3]
 	if remove_floor:
-		cl = cl[~(cl[:,2] <= -1.5),:]
+		cl = cl[~(cl[:,2] <= -1.25),:]
 	return cl
 
 def load_kitti_odom_cam(basedir, seqid, id, which=2):

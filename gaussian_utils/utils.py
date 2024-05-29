@@ -88,6 +88,25 @@ def mat_to_quat(mat: np.array):
 	q = np.stack([w,x,y,z], axis=-1)
 	return q / np.linalg.norm(q)
 
+def quat_to_mat(q: np.array):
+	qxx = q[...,1] * q[...,1]
+	qyy = q[...,2] * q[...,2]
+	qzz = q[...,3] * q[...,3]
+	qxz = q[...,1] * q[...,3]
+	qxy = q[...,1] * q[...,2]
+	qyz = q[...,2] * q[...,3]
+	qwx = q[...,0] * q[...,1]
+	qwy = q[...,0] * q[...,2]
+	qwz = q[...,0] * q[...,3]
+
+	mat = (
+		[ 1 - 2*(qyy + qzz), 2*(qxy - qwz), 2*(qxz + qwy) ],
+		[ 2*(qxy + qwz), 1 - 2*(qxx + qzz), 2*(qyz - qwx) ],
+		[ 2*(qxz - qwy), 2*(qyz + qwx), 1 - 2*(qxx + qyy) ],
+	)
+
+	return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
+
 def mat_to_zrot_normal(mat: np.array):
 	xlate = mat[...,0:3,3]
 	normals = mat[...,0:3,2]
@@ -116,7 +135,24 @@ def quat_to_z(quat: np.array):
 	cosy_cosp = 1 - 2*(qy*qy + qz*qz)
 	return np.arctan2(siny_cosp, cosy_cosp)
 
-def crop_cloud(cl: np.array, mindist:int=3, maxdist:int=15):
+def quat_mult(q0:np.array, q1:np.array):
+	w0,x0,y0,z0 = q0[...,0], q0[...,1], q0[...,2], q0[...,3]
+	w1,x1,y1,z1 = q1[...,0], q1[...,1], q1[...,2], q1[...,3]
+	return np.stack([
+		-x1*x0 - y1*y0 - z1*z0 + w1*w0,
+		+x1*w0 + y1*z0 - z1*y0 + w1*x0,
+		-x1*z0 + y1*w0 + z1*x0 + w1*y0,
+		+x1*y0 - y1*x0 + z1*w0 + w1*z0,
+	], axis=-1)
+
+def quat_vec_mult(q:np.array, v:np.array):
+	qv = q[...,1:4]
+	qw = q[...,0,None]
+	uv = np.cross(qv, v)
+	uuv = np.cross(qv, uv)
+	return v + 2*(qw*uv + uuv)
+
+def crop_cloud(cl: np.array, mindist:int=1.5, maxdist:int=30):
 	cldist = np.linalg.norm(cl[:,0:2], axis=1)
 	return cl[(mindist <= cldist) & (cldist <= maxdist), :]
 
@@ -124,3 +160,18 @@ def downsample_cloud(cl: np.array, num_points:int, rng:Union[np.random.Generator
 	if len(cl) <= num_points: return cl
 	if rng is None or type(rng) is int: rng = np.random.default_rng(seed=rng)
 	return rng.choice(cl, num_points, replace=False)
+
+def downsample_floor(cl: np.array, z_plane:float = -1.25, floor_ratio = 0.5, rng:Union[np.random.Generator,int]=None) -> np.array:
+	is_floor = cl[:,2] <= z_plane
+	num_floor_points = int(np.sum(is_floor))
+
+	if num_floor_points == 0 or num_floor_points == len(cl):
+		return cl
+
+	if rng is None or type(rng) is int: rng = np.random.default_rng(seed=rng)
+
+	desired_floor_points = int(0.5 + floor_ratio*(len(cl) - num_floor_points))
+
+	floor_selection = rng.choice(cl[is_floor], desired_floor_points, replace=desired_floor_points > num_floor_points)
+
+	return np.concatenate((cl[~is_floor], floor_selection), axis=0)

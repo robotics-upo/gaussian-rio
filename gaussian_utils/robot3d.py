@@ -18,6 +18,10 @@ class RobotPose3D(NamedTuple):
 	mat_rot  :torch.Tensor
 
 	@property
+	def xfrm_3x4(self) -> torch.Tensor:
+		return torch.concat([self.mat_rot, self.xyz_tran[...,None]], dim=-1)
+
+	@property
 	def n_angle(self) -> torch.Tensor:
 		return torch.acos(self.mat_rot[...,2,2])
 
@@ -107,7 +111,7 @@ class RobotModel3D(ICloudTransformer):
 		L = self.I - K @ self.H
 
 		self.state += K @ (new_pose - self.H @ self.state)
-		self.state[0:6] = new_pose
+		self.state[0:3] = new_pose[0:3]
 		self._rotframe = None
 
 		self.cov = L @ self.cov @ L.t() + K @ new_cov @ K.t()

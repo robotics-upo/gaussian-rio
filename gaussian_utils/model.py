@@ -6,11 +6,11 @@ from sklearn.cluster import BisectingKMeans
 from .ops import rot_scale_3d, nearest_center_3d, nearest_gaussian_3d, indexed_transform_3d
 from .utils import GradientDescentParams, RequiresGrad, ICloudTransformer, quat_conj
 
-from typing import Union
+from typing import Union, Tuple
 
 class GaussianModel:
 	def __init__(self,
-		max_clusters:int=100,
+		max_clusters:int=150,
 		disc_thickness:float=0.15,
 		mahal_thresh:float=2.0,
 		fit_params:GradientDescentParams=GradientDescentParams(
@@ -168,13 +168,13 @@ class GaussianModel:
 		g_quats[:] = -torch.nn.functional.normalize(best_weights[2])
 		g_quats[:,0] *= -1
 
-	def register(self, cloud:Union[np.ndarray,torch.Tensor], swarm:Union[np.ndarray,torch.Tensor], xfrm:ICloudTransformer) -> torch.Tensor:
+	def register(self, cloud:Union[np.ndarray,torch.Tensor], swarm:Union[np.ndarray,torch.Tensor], xfrm:ICloudTransformer) -> Tuple[torch.Tensor, torch.Tensor, int]:
 		cloud = torch.as_tensor(cloud, dtype=torch.float32, device='cuda')
 		swarm = torch.as_tensor(swarm, dtype=torch.float32, device='cuda')
 
 		g_invmat = self.inverse_matrices
 
-		best_epoch, best_L, best_particle = None, None, None
+		best_epoch, best_swarm, best_L, best_overall_L, best_overall_pid = (None,)*5
 
 		with RequiresGrad(swarm) as rg:
 			opt = torch.optim.Adam(rg.tensors, lr=self._reg.lr, eps=self._reg.eps)
@@ -186,15 +186,26 @@ class GaussianModel:
 				cl_sqmahal = cl_sqmahal.reshape(swarm.shape[0], -1)
 
 				L_batch = torch.mean(cl_sqmahal, dim=-1)
-				L, particleid = torch.min(L_batch.detach(), dim=0)
+				L_batch_nograd = L_batch.detach()
 
-				#print(f'  Epoch {1+epoch} loss={float(L):.4f} particle={particleid}')
+				cur_L, cur_pid = torch.min(L_batch_nograd, dim=0)
+				#print(f'  Epoch {1+epoch} loss={float(cur_L):.4f} particle={int(cur_pid)}')
 
-				if best_epoch is None or best_L > float(L) + self._reg.min_improvement:
+				if best_epoch is None:
 					best_epoch = epoch
-					best_L = float(L)
-					best_particle = swarm.detach()[None, particleid].clone()
-				elif (epoch - best_epoch) > self._reg.patience:
+					best_swarm = swarm.detach().clone()
+					best_L = L_batch_nograd
+					best_overall_L, best_overall_pid = torch.min(best_L, dim=0)
+				elif torch.any(improvement := best_L > L_batch_nograd + self._reg.min_improvement):
+					best_swarm = torch.where(improvement[:,None], swarm.detach().clone(), best_swarm)
+					best_L = torch.where(improvement, L_batch_nograd, best_L)
+					overall_L, overall_pid = torch.min(best_L, dim=0)
+					if best_overall_L > overall_L + self._reg.min_improvement:
+						best_epoch = epoch
+						best_overall_L = overall_L
+						best_overall_pid = overall_pid
+
+				if (epoch - best_epoch) > self._reg.patience:
 					#print('Early stopping')
 					break
 
@@ -202,4 +213,4 @@ class GaussianModel:
 				torch.sum(L_batch).backward()
 				opt.step()
 
-		return best_particle
+		return best_swarm, best_L, best_overall_pid
