@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Union
 
+TAU = float(2*np.pi)
+
 @dataclass
 class GradientDescentParams:
 	lr             :float
@@ -105,7 +107,8 @@ def quat_to_mat(q: np.array):
 		[ 2*(qxz - qwy), 2*(qyz + qwx), 1 - 2*(qxx + qyy) ],
 	)
 
-	return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
+	if type(q) is np.array:
+		return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
 
 def mat_to_zrot_normal(mat: np.array):
 	xlate = mat[...,0:3,3]
@@ -135,14 +138,48 @@ def quat_to_z(quat: np.array):
 	cosy_cosp = 1 - 2*(qy*qy + qz*qz)
 	return np.arctan2(siny_cosp, cosy_cosp)
 
+def quat_to_rpy(quat: np.array):
+	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
+
+	# roll (x-axis rotation)
+	sinr_cosp = 2*(qw*qx + qy*qz)
+	cosr_cosp = 1 - 2*(qx*qx + qy*qy)
+	roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+	# pitch (y-axis rotation)
+	sinp = np.sqrt(1 + 2*(qw*qy - qx*qz))
+	cosp = np.sqrt(1 - 2*(qw*qy - qx*qz))
+	pitch = 2*np.arctan2(sinp, cosp) - TAU/4
+
+	# yaw (z-axis rotation)
+	siny_cosp = 2*(qw*qz + qx*qy)
+	cosy_cosp = 1 - 2*(qy*qy + qz*qz)
+	yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+	return np.stack((roll,pitch,yaw), axis=-1)
+
+def rpy_to_quat(rpy: np.array):
+	r,p,y = rpy[...,0]/2, rpy[...,1]/2, rpy[...,2]/2
+
+	cosr,sinr = np.cos(r),np.sin(r)
+	cosp,sinp = np.cos(p),np.sin(p)
+	cosy,siny = np.cos(y),np.sin(y)
+
+	return np.stack([
+		cosr*cosp*cosy + sinr*sinp*siny,
+		sinr*cosp*cosy - cosr*sinp*siny,
+		cosr*sinp*cosy + sinr*cosp*siny,
+		cosr*cosp*siny - sinr*sinp*cosy,
+	], axis=-1)
+
 def quat_mult(q0:np.array, q1:np.array):
 	w0,x0,y0,z0 = q0[...,0], q0[...,1], q0[...,2], q0[...,3]
 	w1,x1,y1,z1 = q1[...,0], q1[...,1], q1[...,2], q1[...,3]
 	return np.stack([
-		-x1*x0 - y1*y0 - z1*z0 + w1*w0,
-		+x1*w0 + y1*z0 - z1*y0 + w1*x0,
-		-x1*z0 + y1*w0 + z1*x0 + w1*y0,
-		+x1*y0 - y1*x0 + z1*w0 + w1*z0,
+		w0*w1 - x0*x1 - y0*y1 - z0*z1,
+		w0*x1 + x0*w1 + y0*z1 - z0*y1,
+		w0*y1 + y0*w1 + z0*x1 - x0*z1,
+		w0*z1 + z0*w1 + x0*y1 - y0*x1,
 	], axis=-1)
 
 def quat_vec_mult(q:np.array, v:np.array):
