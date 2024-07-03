@@ -44,10 +44,14 @@ class EgoVelocity:
 		np.fill_diagonal(cov, std**2)
 		return EgoVelocity(vel=vel, cov=cov)
 
-def _solve_lsq(dirs, dops):
-	return np.linalg.pinv(dirs, rcond=1e-4) @ dops
+def _solve_lsq(dirs, dops, force_forward=False):
+	if not force_forward:
+		return np.linalg.pinv(dirs, rcond=1e-4) @ dops
 
-def _solve_egovel_ransac(dirs, dops, n_points=5, n_iters=None, p_outlier=0.05, p_success=0.995, inlier_thresh=0.3, recalc_with_inliers=True, sigma_offset=0.0):
+	xvel = np.mean(dops / dirs[:,0])
+	return np.array([xvel, 0, 0], dtype=np.float32)
+
+def _solve_egovel_ransac(dirs, dops, force_forward=False, n_points=5, n_iters=None, p_outlier=0.05, p_success=0.995, inlier_thresh=0.3, recalc_with_inliers=True, sigma_offset=0.0):
 	if n_iters is None:
 		n_iters = int(0.5 + np.log(1.0 - p_success) / np.log(1.0 - (1.0-p_outlier)**n_points))
 
@@ -61,12 +65,12 @@ def _solve_egovel_ransac(dirs, dops, n_points=5, n_iters=None, p_outlier=0.05, p
 	best_vel = None
 	best_err = None
 	best_inliers = None
-	best_inlier_count = 0
+	best_inlier_count = -1
 
 	for it in range(n_iters):
 		cursel = rng.choice(all_idx, n_points, replace=False, shuffle=False)
 		try:
-			curvel = _solve_lsq(dirs[cursel], dops[cursel])
+			curvel = _solve_lsq(dirs[cursel], dops[cursel], force_forward)
 		except:
 			continue
 
@@ -87,14 +91,14 @@ def _solve_egovel_ransac(dirs, dops, n_points=5, n_iters=None, p_outlier=0.05, p
 			#print('Already saturated')
 			break
 
-	if best_vel is None:
+	if best_vel is None or best_inlier_count/pop_size < 0.5:
 		raise Exception("What happened")
 
 	#print(best_inlier_count,'out of',pop_size,'are inliers')
 
 	if recalc_with_inliers:
 		#print('Recalculating with all inliers')
-		best_vel = _solve_lsq(dirs[best_inliers], dops[best_inliers])
+		best_vel = _solve_lsq(dirs[best_inliers], dops[best_inliers], force_forward)
 		best_err = (dirs @ best_vel - dops)[best_inliers]
 
 	# Calculate cov matrix
