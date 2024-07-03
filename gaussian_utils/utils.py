@@ -90,7 +90,7 @@ def mat_to_quat(mat: np.array):
 	q = np.stack([w,x,y,z], axis=-1)
 	return q / np.linalg.norm(q)
 
-def quat_to_mat(q: np.array):
+def quat_to_mat(q: np.ndarray):
 	qxx = q[...,1] * q[...,1]
 	qyy = q[...,2] * q[...,2]
 	qzz = q[...,3] * q[...,3]
@@ -107,8 +107,7 @@ def quat_to_mat(q: np.array):
 		[ 2*(qxz - qwy), 2*(qyz + qwx), 1 - 2*(qxx + qyy) ],
 	)
 
-	if type(q) is np.array:
-		return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
+	return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
 
 def mat_to_zrot_normal(mat: np.array):
 	xlate = mat[...,0:3,3]

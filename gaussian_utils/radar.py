@@ -1,6 +1,6 @@
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple
+from typing import List, Tuple
 try:
 	from typing import Self
 except:

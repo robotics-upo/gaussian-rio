@@ -188,9 +188,6 @@ class Strapdown(ICloudTransformer):
 
 		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
 		H[:,I_v] = R.t()
-		H[:,I_dz.start+0] = R[1]*v[2] - R[2]*v[1]
-		H[:,I_dz.start+1] = R[2]*v[0] - R[0]*v[2]
-		H[:,I_dz.start+2] = R[0]*v[1] - R[1]*v[0]
 
 		self._update_common(egovel, egovel_cov, H)
 
