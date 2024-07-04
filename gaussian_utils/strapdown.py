@@ -6,7 +6,8 @@ from .ops import rot_scale_3d
 from .model import GaussianModel
 from .robot3d import RobotPose3D
 
-from typing import Tuple, NamedTuple
+import itertools
+from typing import List, Tuple, NamedTuple
 try:
 	from typing import Self
 except:
@@ -33,6 +34,9 @@ SD_statelen = I_q.stop
 SD_len = I_dz.stop
 SD_noiselen = W_w.stop
 
+def slices_to_indices(*args:List[slice]) -> List[int]:
+	return list(itertools.chain(*(range(x.start, x.stop) for x in args)))
+
 def skewsym(v: torch.Tensor) -> torch.Tensor:
 	x,y,z = float(v[0]),float(v[1]),float(v[2])
 	return torch.as_tensor([
@@ -55,10 +59,10 @@ def quat_mult(q0:torch.Tensor, q1:torch.Tensor):
 	], dim=-1)
 
 def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
-	norm = torch.linalg.norm(w)
+	norm = torch.linalg.norm(w, dim=-1)
 	qw,sinc = torch.cos(norm), torch.sinc(norm / (0.5*TAU))
-	qv = w*sinc
-	return torch.stack([ qw, qv[0], qv[1], qv[2] ], dim=-1)
+	qv = w*sinc[...,None]
+	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
 class Strapdown(ICloudTransformer):
 	def __init__(self):
@@ -80,12 +84,25 @@ class Strapdown(ICloudTransformer):
 		self._covchol = None
 
 		self.I = torch.eye(SD_len, dtype=torch.float32, device='cuda')
+		self.zero_dtheta = torch.zeros((3,), dtype=torch.float32, device='cuda')
 
 	@property
 	def rotframe(self) -> torch.Tensor:
 		if self._rotframe is None:
-			self._rotframe = quat_to_mat(self.state[I_q])
+			self._rotframe = quat_to_mat(self.quat)
 		return self._rotframe
+
+	@property
+	def pose(self) -> RobotPose3D:
+		return RobotPose3D(xyz_tran=self.pos[None], mat_rot=self.rotframe[None])
+
+	@property
+	def covchol(self) -> torch.Tensor:
+		if self._covchol is None:
+			idx = slices_to_indices(I_p, I_dz)
+			cov = self.cov[idx][:,idx]
+			self._covchol = torch.linalg.cholesky(cov + 1e-4 * torch.eye(len(idx), dtype=torch.float32, device='cuda'))
+		return self._covchol
 
 	@property
 	def pos(self) -> torch.Tensor:
@@ -107,9 +124,12 @@ class Strapdown(ICloudTransformer):
 	def gyro_bias(self) -> torch.Tensor:
 		return self.state[I_wb]
 
-	def init_vel(self, vel:torch.Tensor, velcov:torch.Tensor) -> None:
+	def init_vel(self, vel:torch.Tensor, vel_cov:torch.Tensor) -> None:
+		vel = torch.as_tensor(vel, dtype=torch.float32, device='cuda')
+		vel_cov = torch.as_tensor(vel_cov, dtype=torch.float32, device='cuda')
+
 		self.state[I_v] = vel
-		self.cov[I_v,I_v] = velcov
+		self.cov[I_v,I_v] = vel_cov
 		self._covchol = None
 
 	def advance(self, timediff:float, accel:torch.Tensor, accel_cov:torch.Tensor, omega:torch.Tensor, omega_cov:torch.Tensor):
@@ -152,21 +172,26 @@ class Strapdown(ICloudTransformer):
 		self._covchol = None
 
 	def transform(self, particles:torch.Tensor) -> torch.Tensor:
-		raise NotImplementedError()
+		p = torch.concat((self.pos, self.zero_dtheta), dim=0)[...,None] + self.covchol @ particles[...,0:6,None]
+		return p[...,0]
 
 	def transform_as_pose(self, particles:torch.Tensor) -> RobotPose3D:
-		raise NotImplementedError()
+		p = self.transform(particles)
+		p_xyz = p[:,0:3]
+		p_quat = quat_mult(pure_quat_exp(0.5*p[:,3:6]), self.quat)
+		p_mat = rot_scale_3d(torch.ones(p_quat.shape[:-1] + (3,), dtype=torch.float32, device='cuda'), p_quat)
+		return RobotPose3D(xyz_tran=p_xyz, mat_rot=p_mat)
 
 	# ICloudTransformer
 	def transform_cloud(self, cloud:torch.Tensor, particles:torch.Tensor=None) -> torch.Tensor:
-		raise NotImplementedError()
+		poses = self.transform_as_pose(particles) if particles is not None else self.pose
+		return poses.xyz_tran[:,None,:] + (poses.mat_rot[:,None,:] @ cloud[None,:,:,None])[...,0]
 
 	def _update_common(self, y:torch.Tensor, y_cov:torch.Tensor, H:torch.Tensor) -> None:
 		K = self.cov @ H.t() @ torch.linalg.inv(H @ self.cov @ H.t() + y_cov)
 		L = self.I - K @ H
 
-		dtheta = torch.zeros((3,), dtype=torch.float32, device='cuda')
-		state = torch.concat((self.state[I_ekf], dtheta), dim=0)
+		state = torch.concat((self.state[I_ekf], self.zero_dtheta), dim=0)
 		state += K @ (y - H @ state)
 		self.state[I_ekf] = state[I_ekf]
 		self.cov = L @ self.cov @ L.t() + K @ y_cov @ K.t()
@@ -201,4 +226,11 @@ class Strapdown(ICloudTransformer):
 		self._update_common(dtheta, dtheta_cov, H)
 
 	def update_pose(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
-		raise NotImplementedError()
+		pose = torch.as_tensor(pose, dtype=torch.float32, device='cuda')
+		pose_cov = torch.as_tensor(pose_cov, dtype=torch.float32, device='cuda')
+
+		H = torch.zeros((6,SD_len), dtype=torch.float32, device='cuda')
+		H[0:3,I_p].fill_diagonal_(1)
+		H[3:6,I_dz].fill_diagonal_(1)
+
+		self._update_common(pose, pose_cov, H)

@@ -188,7 +188,7 @@ def quat_vec_mult(q:np.array, v:np.array):
 	uuv = np.cross(qv, uv)
 	return v + 2*(qw*uv + uuv)
 
-def crop_cloud(cl: np.array, mindist:int=1.5, maxdist:int=30):
+def crop_cloud(cl: np.array, mindist:float=1.5, maxdist:float=30.0):
 	cldist = np.linalg.norm(cl[:,0:2], axis=1)
 	return cl[(mindist <= cldist) & (cldist <= maxdist), :]
 
