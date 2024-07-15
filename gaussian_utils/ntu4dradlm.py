@@ -3,7 +3,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Union, List, Tuple, Iterator
 
-from .utils import quat_vec_mult
+from .utils import quat_vec_mult, quat_mult, rpy_to_quat
 from .radar import ImuData, RadarData
 
 import rosbag
@@ -11,26 +11,46 @@ from rospy import Time, Duration
 from sensor_msgs.msg import PointCloud, Imu, CompressedImage
 from cv_bridge import CvBridge
 
+TAU = float(2*np.pi)
+
 TOPIC_LIST = [
 	RADAR_TOPIC := '/radar_enhanced_pcl',
 	IMU_TOPIC   := '/vectornav/imu',
 	CAM_TOPIC   := '/rgb_cam/image_raw/compressed',
 ]
 
+IMU_TO_RADAR = np.array([
+	[  0.999735807578,  -0.02148120581797, -0.00826995351904 ],
+	[ -0.0215215701795, -0.9997581134183,  -0.0048509797951  ],
+	[ -0.0081643477385,  0.00502853428037, -0.99995400578406 ],
+], dtype=np.float32)
+
+GT_ROT_CORRECTIONS = {
+	'cp':    ( 0.25, -0.75, 0.0 ),
+	'nyl':   ( 1.75,  0.25, 0.0 ),
+	'loop1': (-0.65,  1.55, 0.0 ),
+}
+
 def load_ntu4dradlm_gt(basedir, seqid):
 	mat = np.loadtxt(f'{basedir}/{seqid}/gt_odom.txt', dtype=np.float64)
 
 	ts   = mat[:,0]
 	pos  = mat[:,1:4].astype(np.float32)
+	pos -= pos[0]
 	quat = mat[:,4:8].astype(np.float32)
 	quat = quat[:,[3,0,1,2]]
 
-	return ts, pos - pos[0], quat
+	if correction := GT_ROT_CORRECTIONS.get(seqid):
+		cquat = rpy_to_quat(np.array(correction, dtype=np.float32) * TAU/360)
+		quat = quat_mult(cquat, quat)
+		pos = quat_vec_mult(cquat[None], pos)
+
+	return ts, pos, quat
 
 def _parse_imu(msg: Imu):
 	t = msg.header.stamp.to_sec()
-	accel = np.array([msg.linear_acceleration.x, -msg.linear_acceleration.y, -msg.linear_acceleration.z], dtype=np.float32)
-	omega = np.array([msg.angular_velocity.x, -msg.angular_velocity.y, -msg.angular_velocity.z], dtype=np.float32)
+	accel = IMU_TO_RADAR @ np.array([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z], dtype=np.float32)
+	omega = IMU_TO_RADAR @ np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float32)
 
 	accel_cov = np.array(msg.linear_acceleration_covariance, dtype=np.float32).reshape((3,3))
 	omega_cov = np.array(msg.angular_velocity_covariance,    dtype=np.float32).reshape((3,3))

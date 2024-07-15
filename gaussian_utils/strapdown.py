@@ -30,12 +30,22 @@ W_z = slice(3,6)  # Attitude error process noise (world-space)
 W_a = slice(6,9)  # Accelerometer noise (body-space)
 W_w = slice(9,12) # Gyroscope noise (body-space)
 
+F_p  = slice(0,3)
+F_q  = slice(3,7)
+F_dz = slice(3,6)
+F_len = F_dz.stop
+
 SD_statelen = I_q.stop
 SD_len = I_dz.stop
 SD_noiselen = W_w.stop
 
 def slices_to_indices(*args:List[slice]) -> List[int]:
 	return list(itertools.chain(*(range(x.start, x.stop) for x in args)))
+
+SD_to_F = slices_to_indices(I_p, I_dz)
+
+def particle_cov(cov: torch.Tensor) -> torch.Tensor:
+	return cov[SD_to_F][:,SD_to_F]
 
 def skewsym(v: torch.Tensor) -> torch.Tensor:
 	x,y,z = float(v[0]),float(v[1]),float(v[2])
@@ -65,26 +75,36 @@ def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
 	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
 class Strapdown(ICloudTransformer):
-	def __init__(self):
+	def __init__(self, want_uncertain_g=True, want_accel_bias=False, want_yaw_gyro_bias=False):
 		self.state = torch.zeros((SD_statelen,), dtype=torch.float32, device='cuda')
 		self.state[I_g.start+2] = -9.80511
 		self.state[I_q.start] = 1
 		self._rotframe = None
 
 		self.cov = torch.zeros((SD_len,SD_len), dtype=torch.float32, device='cuda')
-		#self.cov[I_g.start+0,I_g.start+0] = 0.01**2
-		#self.cov[I_g.start+1,I_g.start+1] = 0.01**2
-		#self.cov[I_g.start+2,I_g.start+2] = 0.2**2
-		#self.cov[I_ab,I_ab].fill_diagonal_(0.01**2)
-		#self.cov[I_ab.start+2,I_ab.start+2] = 0
-		self.cov[I_wb,I_wb].fill_diagonal_((0.5*TAU/360)**2) # 0.01
-		self.cov[I_wb.start+2,I_wb.start+2] = 0 # To be disabled when a reliable source of yaw is incorporated
-		#self.cov[I_dz.start+0,I_dz.start+0] = 0.01**2
-		#self.cov[I_dz.start+0,I_dz.start+0] = 0.01**2
 		self._covchol = None
+
+		if want_uncertain_g:
+			#self.cov[I_g.start+0,I_g.start+0] = 0.01**2
+			#self.cov[I_g.start+1,I_g.start+1] = 0.01**2
+			self.cov[I_g.start+2,I_g.start+2] = 0.2**2
+
+		if want_accel_bias:
+			self.cov[I_ab,I_ab].fill_diagonal_(0.01**2)
+			#self.cov[I_ab.start+2,I_ab.start+2] = 0
+
+		self.cov[I_wb,I_wb].fill_diagonal_((0.5*TAU/360)**2) # 0.01
+		if not want_yaw_gyro_bias: # Disable gyroscope yaw bias estimation when there isn't a reliable source of yaw
+			self.cov[I_wb.start+2,I_wb.start+2] = 0
 
 		self.I = torch.eye(SD_len, dtype=torch.float32, device='cuda')
 		self.zero_dtheta = torch.zeros((3,), dtype=torch.float32, device='cuda')
+
+		self.keyframe()
+
+	def keyframe(self) -> None:
+		self.kf_cov = torch.zeros_like(self.cov)
+		self.kf_frame = self.rotframe
 
 	@property
 	def rotframe(self) -> torch.Tensor:
@@ -94,19 +114,29 @@ class Strapdown(ICloudTransformer):
 
 	@property
 	def pose(self) -> RobotPose3D:
-		return RobotPose3D(xyz_tran=self.pos[None], mat_rot=self.rotframe[None])
+		return RobotPose3D(xyz_tran=self.pos[None].clone(), mat_rot=self.rotframe[None])
+
+	def set_particle_space(self, cov:torch.Tensor) -> None:
+		cov = torch.as_tensor(cov, dtype=torch.float32, device='cuda')
+		self._covchol = torch.linalg.cholesky(cov + 1e-4 * torch.eye(F_len, dtype=torch.float32, device='cuda'))
 
 	@property
 	def covchol(self) -> torch.Tensor:
 		if self._covchol is None:
-			idx = slices_to_indices(I_p, I_dz)
-			cov = self.cov[idx][:,idx]
-			self._covchol = torch.linalg.cholesky(cov + 1e-4 * torch.eye(len(idx), dtype=torch.float32, device='cuda'))
+			self.set_particle_space(particle_cov(self.kf_cov))
 		return self._covchol
+
+	@property
+	def particle_basecov(self) -> torch.Tensor:
+		return particle_cov(self.cov - self.kf_cov)
 
 	@property
 	def pos(self) -> torch.Tensor:
 		return self.state[I_p]
+
+	@property
+	def vel(self) -> torch.Tensor:
+		return self.state[I_v]
 
 	@property
 	def quat(self) -> torch.Tensor:
@@ -123,6 +153,10 @@ class Strapdown(ICloudTransformer):
 	@property
 	def gyro_bias(self) -> torch.Tensor:
 		return self.state[I_wb]
+
+	@property
+	def dtheta_cov(self) -> torch.Tensor:
+		return self.cov[I_dz,I_dz]
 
 	def init_vel(self, vel:torch.Tensor, vel_cov:torch.Tensor) -> None:
 		vel = torch.as_tensor(vel, dtype=torch.float32, device='cuda')
@@ -168,7 +202,8 @@ class Strapdown(ICloudTransformer):
 		N[I_v,W_a] = N[I_dz,W_w] = R*timediff
 		N[I_dz,W_z].fill_diagonal_(1)
 
-		self.cov = F @ self.cov @ F.t() + N @ Q @ N.t()
+		self.cov = F @ self.cov @ F.t() + (B := N @ Q @ N.t())
+		self.kf_cov = F @ self.kf_cov @ F.t() + B
 		self._covchol = None
 
 	def transform(self, particles:torch.Tensor) -> torch.Tensor:
@@ -194,7 +229,8 @@ class Strapdown(ICloudTransformer):
 		state = torch.concat((self.state[I_ekf], self.zero_dtheta), dim=0)
 		state += K @ (y - H @ state)
 		self.state[I_ekf] = state[I_ekf]
-		self.cov = L @ self.cov @ L.t() + K @ y_cov @ K.t()
+		self.cov = L @ self.cov @ L.t() + (B := K @ y_cov @ K.t())
+		self.kf_cov = L @ self.kf_cov @ L.t() + B
 		self._covchol = None
 
 		# ESKF reset
@@ -204,6 +240,7 @@ class Strapdown(ICloudTransformer):
 		resetmat = torch.eye(SD_len, dtype=torch.float32, device='cuda')
 		resetmat[I_dz,I_dz] = quat_to_mat(qerr)
 		self.cov = resetmat @ self.cov @ resetmat.t()
+		self.kf_cov = resetmat @ self.kf_cov @ resetmat.t()
 
 	def update_egovel(self, egovel:torch.Tensor, egovel_cov:torch.Tensor) -> None:
 		R = self.rotframe

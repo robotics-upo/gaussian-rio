@@ -9,6 +9,7 @@ from collections import namedtuple
 from functools import lru_cache
 
 from .model import GaussianModel
+from .utils import quat_to_rpy
 from .robot3d import RobotPose3D
 
 TAU = float(2*np.pi)
@@ -126,6 +127,219 @@ def visualize(
 	ax.set_xlim3d(ptcenter[0]-ptscale, ptcenter[0]+ptscale)
 	ax.set_ylim3d(ptcenter[1]-ptscale, ptcenter[1]+ptscale)
 	ax.set_zlim3d(ptcenter[2]-ptscale, ptcenter[2]+ptscale)
+
+	if title is not None: fig.suptitle(title)
+	if outfile is None:
+		plt.show()
+	else:
+		plt.savefig(outfile)
+
+	plt.close('all')
+
+def visualize_odom(
+	pred_t   :np.ndarray,
+	gt_t     :np.ndarray,
+	pred_pos :np.ndarray,
+	gt_pos   :np.ndarray,
+	pred_rot :np.ndarray,
+	gt_rot   :np.ndarray = None,
+	imu_rp   :np.ndarray = None,
+	imu_t    :np.ndarray = None,
+	egovel   :np.ndarray = None,
+	aclr_bias:np.ndarray = None,
+	gyro_bias:np.ndarray = None,
+	title    :str=None,
+	outfile  :str=None
+):
+	pred_rot = quat_to_rpy(pred_rot) * 360/TAU
+	if gt_rot is not None:
+		gt_rot = quat_to_rpy(gt_rot) * 360/TAU
+	if imu_rp is not None:
+		imu_rp = imu_rp * 360/TAU
+	if gyro_bias is not None:
+		gyro_bias = gyro_bias * 360/TAU
+	if imu_t is None:
+		imu_t = pred_t
+
+	min_t = min(np.min(pred_t), np.min(gt_t))
+	max_t = max(np.max(pred_t), np.max(gt_t))
+
+	min_x = min(np.min(pred_pos[:,0]), np.min(gt_pos[:,0]))
+	max_x = max(np.max(pred_pos[:,0]), np.max(gt_pos[:,0]))
+	min_y = min(np.min(pred_pos[:,1]), np.min(gt_pos[:,1]))
+	max_y = max(np.max(pred_pos[:,1]), np.max(gt_pos[:,1]))
+	min_z = min(np.min(pred_pos[:,2]), np.min(gt_pos[:,2]))
+	max_z = max(np.max(pred_pos[:,2]), np.max(gt_pos[:,2]))
+
+	min_roll  = np.min(pred_rot[:,0])
+	max_roll  = np.max(pred_rot[:,0])
+	min_pitch = np.min(pred_rot[:,1])
+	max_pitch = np.max(pred_rot[:,1])
+	min_yaw   = np.min(pred_rot[:,2])
+	max_yaw   = np.max(pred_rot[:,2])
+
+	if gt_rot is not None:
+		min_roll  = min(min_roll,  np.min(gt_rot[:,0]))
+		max_roll  = max(max_roll,  np.max(gt_rot[:,0]))
+		min_pitch = min(min_pitch, np.min(gt_rot[:,1]))
+		max_pitch = max(max_pitch, np.max(gt_rot[:,1]))
+		min_yaw   = min(min_yaw,   np.min(gt_rot[:,2]))
+		max_yaw   = max(max_yaw,   np.max(gt_rot[:,2]))
+
+	if imu_rp is not None:
+		min_roll  = min(min_roll,  np.min(imu_rp[:,0]))
+		max_roll  = max(max_roll,  np.max(imu_rp[:,0]))
+		min_pitch = min(min_pitch, np.min(imu_rp[:,1]))
+		max_pitch = max(max_pitch, np.max(imu_rp[:,1]))
+
+	#--------------------------------------------------------------------------
+
+	if outfile is None:
+		matplotlib.use('GTK3Agg')
+
+	fig = plt.figure(figsize=(15.0, 10.0))
+
+	axes = fig.subplot_mosaic([
+		[ 'rot_roll',  'egovel',    'pos_xy' ],
+		[ 'rot_pitch', 'aclr_bias', 'pos_xy' ],
+		[ 'rot_yaw',   'gyro_bias', 'pos_z'  ],
+	])
+
+	ax = axes['pos_z']
+	ax.grid()
+	ax.plot(pred_t, pred_pos[:,2], label='pred')
+	ax.plot(gt_t,   gt_pos[:,2],   label='gt')
+	ax.legend()
+	ax.set_xlim(min_t, max_t)
+	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+	ax.set_ylim(min_z, max_z)
+	ax.set_ylabel('Z position (m)', loc='top', labelpad=0)
+
+	ax = axes['rot_roll']
+	ax.grid()
+	ax.plot(pred_t, pred_rot[:,0], label='pred')
+	if gt_rot is not None:
+		ax.plot(gt_t, gt_rot[:,0], label='gt')
+	if imu_rp is not None:
+		ax.plot(imu_t, imu_rp[:,0], label='imu', zorder=0)
+	ax.legend()
+	ax.set_xlim(min_t, max_t)
+	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+	ax.set_ylim(min_roll, max_roll)
+	ax.set_ylabel('Roll rotation (º)', loc='top', labelpad=0)
+
+	ax = axes['rot_pitch']
+	ax.grid()
+	ax.plot(pred_t, pred_rot[:,1], label='pred')
+	if gt_rot is not None:
+		ax.plot(gt_t, gt_rot[:,1], label='gt')
+	if imu_rp is not None:
+		ax.plot(imu_t, imu_rp[:,1], label='imu', zorder=0)
+	ax.legend()
+	ax.set_xlim(min_t, max_t)
+	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+	ax.set_ylim(min_pitch, max_pitch)
+	ax.set_ylabel('Pitch rotation (º)', loc='top', labelpad=0)
+
+	ax = axes['rot_yaw']
+	ax.grid()
+	ax.plot(pred_t, pred_rot[:,2], label='pred')
+	if gt_rot is not None:
+		ax.plot(gt_t, gt_rot[:,2], label='gt')
+	ax.legend()
+	ax.set_xlim(min_t, max_t)
+	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+	ax.set_ylim(min_yaw, max_yaw)
+	ax.set_ylabel('Yaw rotation (º)', loc='top', labelpad=0)
+
+	if egovel is not None:
+		ax = axes['egovel']
+		ax.grid()
+		ax.plot(pred_t, egovel[:,0], label='x')
+		ax.plot(pred_t, egovel[:,1], label='y')
+		ax.plot(pred_t, egovel[:,2], label='z')
+		ax.legend()
+		ax.set_xlim(min_t, max_t)
+		ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+		ax.set_ylim(np.min(egovel), np.max(egovel))
+		ax.set_ylabel('Egovelocity (m/s)', loc='top', labelpad=0)
+
+	if aclr_bias is not None:
+		ax = axes['aclr_bias']
+		ax.grid()
+		ax.plot(pred_t, aclr_bias[:,0], label='x')
+		ax.plot(pred_t, aclr_bias[:,1], label='y')
+		ax.plot(pred_t, aclr_bias[:,2], label='z')
+		ax.legend()
+		ax.set_xlim(min_t, max_t)
+		ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+		ax.set_ylim(np.min(aclr_bias), np.max(aclr_bias))
+		ax.set_ylabel('Accelerometer bias (m/s²)', loc='top', labelpad=0)
+
+	if gyro_bias is not None:
+		ax = axes['gyro_bias']
+		ax.grid()
+		ax.plot(pred_t, gyro_bias[:,0], label='roll')
+		ax.plot(pred_t, gyro_bias[:,1], label='pitch')
+		ax.plot(pred_t, gyro_bias[:,2], label='yaw')
+		ax.legend()
+		ax.set_xlim(min_t, max_t)
+		ax.set_xlabel('Time (s)', loc='right', labelpad=0)
+		ax.set_ylim(np.min(gyro_bias), np.max(gyro_bias))
+		ax.set_ylabel('Gyroscope bias (º/s)', loc='top', labelpad=0)
+
+	ax = axes['pos_xy']
+	ax.grid()
+	ax.set_aspect('equal')
+	ax.plot(gt_pos[:,1], gt_pos[:,0], label='gt')
+	ax.plot(pred_pos[:,1], pred_pos[:,0], label='pred')
+	ax.legend()
+	ax.set_xlim(min_y-5, max_y+5)
+	ax.set_xlabel('Y position (m)', loc='right', labelpad=0)
+	ax.invert_xaxis()
+	ax.set_ylim(min_x-5, max_x+5)
+	ax.set_ylabel('X position (m)', loc='top', labelpad=0)
+
+	fig.tight_layout(pad=1.)
+
+	if title is not None: fig.suptitle(title)
+	if outfile is None:
+		plt.show()
+	else:
+		plt.savefig(outfile)
+
+	plt.close('all')
+
+def visualize_error(
+	error  :np.ndarray,
+	title  :str=None,
+	outfile:str=None
+):
+	if outfile is None:
+		matplotlib.use('GTK3Agg')
+
+	fig = plt.figure(figsize=(15.0, 10.0))
+
+	axes = fig.subplot_mosaic([
+		lbl_pos := [ 'X position error', 'Y position error', 'Z position error' ],
+		lbl_rot := [ 'X rotation error', 'Y rotation error', 'Z rotation error' ],
+	])
+
+	for i,which in enumerate(lbl_pos):
+		ax = axes[which]
+		ax.grid()
+		ax.scatter(error[:,0], error[:,1+i], s=2.0)
+		ax.set_xlabel('Distance travelled (m)', loc='right', labelpad=0)
+		ax.set_ylabel(which + ' (m)', loc='top', labelpad=0)
+
+	for i,which in enumerate(lbl_rot):
+		ax = axes[which]
+		ax.grid()
+		ax.scatter(error[:,0], error[:,4+i]*360/TAU, s=2.0)
+		ax.set_xlabel('Distance travelled (m)', loc='right', labelpad=0)
+		ax.set_ylabel(which + ' (º)', loc='top', labelpad=0)
+
+	fig.tight_layout(pad=1.)
 
 	if title is not None: fig.suptitle(title)
 	if outfile is None:

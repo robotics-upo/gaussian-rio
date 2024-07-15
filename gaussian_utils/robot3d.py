@@ -28,6 +28,12 @@ class RobotPose3D(NamedTuple):
 	def __getitem__(self, idx:int) -> Self:
 		return RobotPose3D(xyz_tran=self.xyz_tran[None,idx], mat_rot=self.mat_rot[None,idx])
 
+	def __sub__(lhs, rhs:Self) -> Self:
+		rhs_rot_tran = torch.transpose(rhs.mat_rot, 1, 2)
+		rot = rhs_rot_tran @ lhs.mat_rot
+		xyz = (rhs_rot_tran @ (lhs.xyz_tran - rhs.xyz_tran)[...,None])[...,0]
+		return RobotPose3D(xyz_tran=xyz, mat_rot=rot)
+
 class RobotModel3D(ICloudTransformer):
 	def __init__(self,
 		params:RobotModelParams3D=RobotModelParams3D(
