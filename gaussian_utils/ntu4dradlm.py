@@ -29,6 +29,7 @@ GT_ROT_CORRECTIONS = {
 	'cp':    ( 0.25, -0.75, 0.0 ),
 	'nyl':   ( 1.75,  0.25, 0.0 ),
 	'loop1': (-0.65,  1.55, 0.0 ),
+	'loop2': ( 2.0,   3.0,  0.0 ),
 }
 
 def load_ntu4dradlm_gt(basedir, seqid):
