@@ -1,14 +1,17 @@
+import torch
 import numpy as np
+import small_gicp
 
 from .radar import ImuData, RadarData, calc_radar_egovel
-from .utils import quat_to_rpy, rpy_to_quat, quat_conj, quat_mult, quat_to_mat
+from .utils import quat_to_rpy, rpy_to_quat, quat_conj, quat_mult, quat_to_mat, mat_to_quat
+from .robot3d import RobotPose3D
 from .strapdown import Strapdown
 
 TAU = float(2*np.pi)
 
 class ImuRadarOdometry(Strapdown):
-	def __init__(self, seed=3135134162):
-		super().__init__()
+	def __init__(self, seed=3135134162, *args, **kwargs):
+		super().__init__(*args, **kwargs)
 		self.ref_time = None
 		self.imu_time = None
 		self.imu_rp = (0.0,0.0)
@@ -87,6 +90,64 @@ class ImuRadarOdometry(Strapdown):
 			self.update_egovel(vel, vel_cov)
 
 		if inliers is not None:
-			return cl[inliers]
-		else:
-			return cl
+			cl = cl[inliers]
+
+		if self.has_keyframe:
+			self.scan_matching(cl)
+
+		return cl
+
+	@property
+	def has_keyframe(self) -> bool:
+		return False
+
+	def scan_matching(self, cl:np.ndarray) -> None:
+		raise NotImplementedError()
+
+class ImuRadarGicpOdometry(ImuRadarOdometry):
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args, want_yaw_gyro_bias=True, **kwargs)
+
+		self.kf_pose : RobotPose3D = None
+		self.downsampling = 1.0
+
+	@property
+	def has_keyframe(self) -> bool:
+		return self.kf_pose is not None
+
+	def keyframe(self, cl:np.ndarray, *args, **kwargs) -> None:
+		super().keyframe()
+		self.kf_pose = self.pose
+
+		self.kf_cl, self.kf_tree = small_gicp.preprocess_points(cl[:,0:3].astype(np.float64), *args, downsampling_resolution=self.downsampling, **kwargs)
+
+	def scan_matching(self, cl:np.ndarray, *args, **kwargs) -> None:
+		relpose = (self.pose - self.kf_pose).xfrm_4x4[0].cpu().numpy()
+
+		cur_cl, cur_tree = small_gicp.preprocess_points(cl[:,0:3].astype(np.float64), *args, downsampling_resolution=self.downsampling, **kwargs)
+
+		result = small_gicp.align(self.kf_cl, cur_cl, self.kf_tree, relpose)
+		result : small_gicp.RegistrationResult
+		if not result.converged:
+			print('  {WARN} Scan matching fail')
+			return
+
+		relpose = RobotPose3D.from_xfrm(result.T_target_source[None])
+
+		newpose = self.kf_pose + relpose
+
+		curquat = self.quat.cpu().numpy()
+		newquat = mat_to_quat(newpose.mat_rot[0].cpu().numpy())
+		qerror = quat_mult(newquat, quat_conj(curquat))
+		qerror /= qerror[0] # ensure w=1 (and also fix signs)
+
+		xyz = newpose.xyz_tran[0].cpu().numpy()
+		dtheta = 2*qerror[1:4]
+
+		basecov = self.particle_basecov
+		noisecov = torch.zeros_like(basecov)
+		noisecov[0:3,0:3].fill_diagonal_(1.0)
+		noisecov[3:6,3:6].fill_diagonal_(0.01)
+
+		kfpose = np.concatenate((xyz, dtheta))
+		self.update_pose(kfpose, basecov + noisecov)

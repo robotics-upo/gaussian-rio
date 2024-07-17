@@ -100,7 +100,7 @@ class Strapdown(ICloudTransformer):
 		self.I = torch.eye(SD_len, dtype=torch.float32, device='cuda')
 		self.zero_dtheta = torch.zeros((3,), dtype=torch.float32, device='cuda')
 
-		self.keyframe()
+		Strapdown.keyframe(self)
 
 	def keyframe(self) -> None:
 		self.kf_cov = torch.zeros_like(self.cov)

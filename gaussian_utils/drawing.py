@@ -291,8 +291,8 @@ def visualize_odom(
 	ax = axes['pos_xy']
 	ax.grid()
 	ax.set_aspect('equal')
-	ax.plot(gt_pos[:,1], gt_pos[:,0], label='gt')
 	ax.plot(pred_pos[:,1], pred_pos[:,0], label='pred')
+	ax.plot(gt_pos[:,1], gt_pos[:,0], label='gt')
 	ax.legend()
 	ax.set_xlim(min_y-5, max_y+5)
 	ax.set_xlabel('Y position (m)', loc='right', labelpad=0)
