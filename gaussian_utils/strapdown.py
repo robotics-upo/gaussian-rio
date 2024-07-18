@@ -103,6 +103,7 @@ class Strapdown(ICloudTransformer):
 		Strapdown.keyframe(self)
 
 	def keyframe(self) -> None:
+		self.kf_pose = self.pose
 		self.kf_cov = torch.zeros_like(self.cov)
 		self.kf_frame = self.rotframe
 
