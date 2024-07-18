@@ -75,7 +75,7 @@ def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
 	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
 class Strapdown(ICloudTransformer):
-	def __init__(self, want_uncertain_g=True, want_accel_bias=False, want_yaw_gyro_bias=False):
+	def __init__(self, want_uncertain_g=False, want_accel_bias=True, want_yaw_gyro_bias=False):
 		self.state = torch.zeros((SD_statelen,), dtype=torch.float32, device='cuda')
 		self.state[I_g.start+2] = -9.80511
 		self.state[I_q.start] = 1
