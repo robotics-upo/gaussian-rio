@@ -124,12 +124,16 @@ class Strapdown(ICloudTransformer):
 	@property
 	def covchol(self) -> torch.Tensor:
 		if self._covchol is None:
-			self.set_particle_space(particle_cov(self.kf_cov))
+			self.set_particle_space(self.particle_child_cov)
 		return self._covchol
 
 	@property
-	def particle_basecov(self) -> torch.Tensor:
+	def particle_keyframe_cov(self) -> torch.Tensor:
 		return particle_cov(self.cov - self.kf_cov)
+
+	@property
+	def particle_child_cov(self) -> torch.Tensor:
+		return particle_cov(self.kf_cov)
 
 	@property
 	def pos(self) -> torch.Tensor:

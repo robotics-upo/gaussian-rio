@@ -102,6 +102,23 @@ class ImuRadarOdometry(Strapdown):
 
 		return cl
 
+	def update_pose_wrapper(self, pose:RobotPose3D, xyzstd:float=1.0, angstd:float=0.1) -> None:
+		curquat = self.quat.cpu().numpy()
+		newquat = mat_to_quat(pose.mat_rot[0].cpu().numpy())
+		qerror = quat_mult(newquat, quat_conj(curquat))
+		qerror /= qerror[0] # ensure w=1 (and also fix signs)
+
+		xyz = pose.xyz_tran[0].cpu().numpy()
+		dtheta = 2*qerror[1:4]
+
+		basecov = self.particle_keyframe_cov
+		noisecov = torch.zeros_like(basecov)
+		noisecov[0:3,0:3].fill_diagonal_(xyzstd**2)
+		noisecov[3:6,3:6].fill_diagonal_(angstd**2)
+
+		kfpose = np.concatenate((xyz, dtheta))
+		self.update_pose(kfpose, basecov + noisecov)
+
 class ImuRadarGicpOdometry(ImuRadarOdometry):
 	def __init__(self, voxel_size=0.25, *args, **kwargs):
 		super().__init__(*args, want_yaw_gyro_bias=True, **kwargs)
@@ -142,21 +159,4 @@ class ImuRadarGicpOdometry(ImuRadarOdometry):
 			return
 
 		relpose = RobotPose3D.from_xfrm(result.T_target_source[None])
-
-		newpose = self.kf_pose + relpose
-
-		curquat = self.quat.cpu().numpy()
-		newquat = mat_to_quat(newpose.mat_rot[0].cpu().numpy())
-		qerror = quat_mult(newquat, quat_conj(curquat))
-		qerror /= qerror[0] # ensure w=1 (and also fix signs)
-
-		xyz = newpose.xyz_tran[0].cpu().numpy()
-		dtheta = 2*qerror[1:4]
-
-		basecov = self.particle_basecov
-		noisecov = torch.zeros_like(basecov)
-		noisecov[0:3,0:3].fill_diagonal_(1.0)
-		noisecov[3:6,3:6].fill_diagonal_(0.01)
-
-		kfpose = np.concatenate((xyz, dtheta))
-		self.update_pose(kfpose, basecov + noisecov)
+		self.update_pose_wrapper(self.kf_pose + relpose)
