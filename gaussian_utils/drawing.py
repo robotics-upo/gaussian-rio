@@ -207,8 +207,8 @@ def visualize_odom(
 
 	ax = axes['pos_z']
 	ax.grid()
-	ax.plot(pred_t, pred_pos[:,2], label='pred')
-	ax.plot(gt_t,   gt_pos[:,2],   label='gt')
+	ax.plot(gt_t,   gt_pos[:,2],   label='gt',   color='forestgreen')
+	ax.plot(pred_t, pred_pos[:,2], label='pred', color='crimson')
 	ax.legend()
 	ax.set_xlim(min_t, max_t)
 	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -217,11 +217,12 @@ def visualize_odom(
 
 	ax = axes['rot_roll']
 	ax.grid()
-	ax.plot(pred_t, pred_rot[:,0], label='pred')
-	if gt_rot is not None:
-		ax.plot(gt_t, gt_rot[:,0], label='gt')
 	if imu_rp is not None:
-		ax.plot(imu_t, imu_rp[:,0], label='imu', zorder=0)
+		ax.plot(imu_t, imu_rp[:,0], label='imu', color='cornflowerblue')
+	if gt_rot is not None:
+		ax.plot(gt_t, gt_rot[:,0], label='gt',   color='forestgreen')
+	ax.plot(pred_t, pred_rot[:,0], label='pred', color='crimson')
+
 	ax.legend()
 	ax.set_xlim(min_t, max_t)
 	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -230,11 +231,11 @@ def visualize_odom(
 
 	ax = axes['rot_pitch']
 	ax.grid()
-	ax.plot(pred_t, pred_rot[:,1], label='pred')
-	if gt_rot is not None:
-		ax.plot(gt_t, gt_rot[:,1], label='gt')
 	if imu_rp is not None:
-		ax.plot(imu_t, imu_rp[:,1], label='imu', zorder=0)
+		ax.plot(imu_t, imu_rp[:,1], label='imu', color='cornflowerblue')
+	if gt_rot is not None:
+		ax.plot(gt_t, gt_rot[:,1], label='gt',   color='forestgreen')
+	ax.plot(pred_t, pred_rot[:,1], label='pred', color='crimson')
 	ax.legend()
 	ax.set_xlim(min_t, max_t)
 	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -243,9 +244,9 @@ def visualize_odom(
 
 	ax = axes['rot_yaw']
 	ax.grid()
-	ax.plot(pred_t, pred_rot[:,2], label='pred')
 	if gt_rot is not None:
-		ax.plot(gt_t, gt_rot[:,2], label='gt')
+		ax.plot(gt_t, gt_rot[:,2], label='gt',   color='forestgreen')
+	ax.plot(pred_t, pred_rot[:,2], label='pred', color='crimson')
 	ax.legend()
 	ax.set_xlim(min_t, max_t)
 	ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -255,9 +256,9 @@ def visualize_odom(
 	if egovel is not None:
 		ax = axes['egovel']
 		ax.grid()
-		ax.plot(pred_t, egovel[:,0], label='x')
-		ax.plot(pred_t, egovel[:,1], label='y')
-		ax.plot(pred_t, egovel[:,2], label='z')
+		ax.plot(pred_t, egovel[:,0], label='x', color='crimson')
+		ax.plot(pred_t, egovel[:,1], label='y', color='forestgreen')
+		ax.plot(pred_t, egovel[:,2], label='z', color='cornflowerblue')
 		ax.legend()
 		ax.set_xlim(min_t, max_t)
 		ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -267,9 +268,9 @@ def visualize_odom(
 	if aclr_bias is not None:
 		ax = axes['aclr_bias']
 		ax.grid()
-		ax.plot(pred_t, aclr_bias[:,0], label='x')
-		ax.plot(pred_t, aclr_bias[:,1], label='y')
-		ax.plot(pred_t, aclr_bias[:,2], label='z')
+		ax.plot(pred_t, aclr_bias[:,0], label='x', color='crimson')
+		ax.plot(pred_t, aclr_bias[:,1], label='y', color='forestgreen')
+		ax.plot(pred_t, aclr_bias[:,2], label='z', color='cornflowerblue')
 		ax.legend()
 		ax.set_xlim(min_t, max_t)
 		ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -279,9 +280,9 @@ def visualize_odom(
 	if gyro_bias is not None:
 		ax = axes['gyro_bias']
 		ax.grid()
-		ax.plot(pred_t, gyro_bias[:,0], label='roll')
-		ax.plot(pred_t, gyro_bias[:,1], label='pitch')
-		ax.plot(pred_t, gyro_bias[:,2], label='yaw')
+		ax.plot(pred_t, gyro_bias[:,0], label='roll', color='crimson')
+		ax.plot(pred_t, gyro_bias[:,1], label='pitch', color='forestgreen')
+		ax.plot(pred_t, gyro_bias[:,2], label='yaw', color='cornflowerblue')
 		ax.legend()
 		ax.set_xlim(min_t, max_t)
 		ax.set_xlabel('Time (s)', loc='right', labelpad=0)
@@ -291,8 +292,8 @@ def visualize_odom(
 	ax = axes['pos_xy']
 	ax.grid()
 	ax.set_aspect('equal')
-	ax.plot(pred_pos[:,1], pred_pos[:,0], label='pred')
-	ax.plot(gt_pos[:,1], gt_pos[:,0], label='gt')
+	ax.plot(gt_pos[:,1], gt_pos[:,0], label='gt', color='forestgreen')
+	ax.plot(pred_pos[:,1], pred_pos[:,0], label='pred', color='crimson')
 	ax.legend()
 	ax.set_xlim(min_y-5, max_y+5)
 	ax.set_xlabel('Y position (m)', loc='right', labelpad=0)
