@@ -3,9 +3,11 @@ import numpy as np
 import small_gicp
 
 from .radar import ImuData, RadarData, crop_radar_cloud, calc_radar_egovel
-from .utils import quat_to_rpy, rpy_to_quat, quat_conj, quat_mult, quat_to_mat, mat_to_quat
+from .utils import ICloudTransformer, quat_to_rpy, rpy_to_quat, quat_conj, quat_mult, quat_to_mat, mat_to_quat, downsample_cloud
 from .robot3d import RobotPose3D
-from .strapdown import Strapdown
+from .ops import rot_scale_3d
+from .model import GaussianModel
+from .strapdown import Strapdown, pure_quat_exp
 
 TAU = float(2*np.pi)
 
@@ -160,3 +162,96 @@ class ImuRadarGicpOdometry(ImuRadarOdometry):
 
 		relpose = RobotPose3D.from_xfrm(result.T_target_source[None])
 		self.update_pose_wrapper(self.kf_pose + relpose)
+
+class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
+	def __init__(self,
+		voxel_size   :float=0.25,
+		gaussian_size:int=20,
+		fit_points   :int=10000,
+		fit_thresh   :float=50.0,
+		reg_points   :int=5000,
+		num_particles:int=8,
+		*args, **kwargs
+	):
+		super().__init__(*args, want_yaw_gyro_bias=True, **kwargs)
+
+		self.voxel_size    = voxel_size
+		self.gaussian_size = gaussian_size
+		self.fit_points    = fit_points
+		self.fit_thresh    = fit_thresh
+		self.reg_points    = reg_points
+		self.num_particles = num_particles
+
+		self.rng = np.random.default_rng(seed=3135134162)
+
+		self.kf_model :GaussianModel = None
+		self.last_cl  :np.ndarray    = None
+
+	@property
+	def has_empty_keyframe(self) -> bool:
+		return self.kf_model is None
+
+	def keyframe(self) -> None:
+		super().keyframe()
+
+		cl = downsample_cloud(self.last_cl, self.fit_points, self.rng)
+		num_gaussians = int(0.5 + len(cl)/self.gaussian_size)
+
+		self.kf_model = GaussianModel(max_clusters=num_gaussians)
+		self.kf_model.add_cloud(cl)
+
+	def process(self, bundle:RadarData) -> np.ndarray:
+		cl = super().process(bundle)
+		self._scan_matching(cl)
+		return cl
+
+	def _scan_matching(self, cl:np.ndarray) -> None:
+		# Perform voxel grid sampling on the point cloud
+		cl = small_gicp.voxelgrid_sampling(cl[:,0:3], self.voxel_size).points()
+		cl = cl[:,0:3].astype(np.float32).copy()
+		self.last_cl = cl
+
+		if self.has_empty_keyframe:
+			return
+
+		self.particlemean = self.pose - self.kf_pose
+
+		basecov = self.particle_keyframe_cov
+		particlecov = torch.zeros_like(basecov)
+		particlecov[0:3,0:3].fill_diagonal_(0.25**2)
+		particlecov[3:6,3:6].fill_diagonal_((10*TAU/360)**2)
+		self.set_particle_space(particlecov)
+
+		cl = downsample_cloud(cl, self.reg_points, self.rng)
+
+		swarm = self.rng.normal(size=(self.num_particles, 6))
+		swarm = torch.as_tensor(swarm, dtype=torch.float32, device='cuda')
+
+		best_particles, best_L, best_pid = self.kf_model.register(cl, swarm, self)
+		L = float(best_L[best_pid])
+		if L >= self.fit_thresh:
+			print('  {WARN} Scan matching fail')
+			return
+
+		new_relpose = self.transform_as_pose(best_particles[None,best_pid])
+		new_pose = self.kf_pose + new_relpose
+
+		#print('  RELPOSE', self.particlemean.xyz_tran[0].cpu().numpy())
+		#print('  OUTPOSE', new_relpose.xyz_tran[0].cpu().numpy())
+		#print('  LOSS', L)
+		self.update_pose_wrapper(new_pose)
+
+	def transform(self, particles:torch.Tensor) -> torch.Tensor:
+		return (self.covchol @ particles[...,0:6,None])[...,0]
+
+	def transform_as_pose(self, particles:torch.Tensor) -> RobotPose3D:
+		p = self.transform(particles)
+		p_xyz = p[:,0:3]
+		p_quat = pure_quat_exp(0.5*p[:,3:6])
+		p_mat = rot_scale_3d(torch.ones(p_quat.shape[:-1] + (3,), dtype=torch.float32, device='cuda'), p_quat)
+		return self.particlemean + RobotPose3D(xyz_tran=p_xyz, mat_rot=p_mat)
+
+	# ICloudTransformer
+	def transform_cloud(self, cloud:torch.Tensor, particles:torch.Tensor=None) -> torch.Tensor:
+		poses = self.transform_as_pose(particles) if particles is not None else self.pose
+		return poses.xyz_tran[:,None,:] + (poses.mat_rot[:,None,:] @ cloud[None,:,:,None])[...,0]

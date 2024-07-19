@@ -1,9 +1,7 @@
 import torch
 import numpy as np
 
-from .utils import ICloudTransformer, quat_to_rpy
 from .ops import rot_scale_3d
-from .model import GaussianModel
 from .robot3d import RobotPose3D
 
 import itertools
@@ -74,7 +72,7 @@ def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
 	qv = w*sinc[...,None]
 	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
-class Strapdown(ICloudTransformer):
+class Strapdown:
 	def __init__(self, want_uncertain_g=False, want_accel_bias=True, want_yaw_gyro_bias=False):
 		self.state = torch.zeros((SD_statelen,), dtype=torch.float32, device='cuda')
 		self.state[I_g.start+2] = -9.80511
@@ -210,22 +208,6 @@ class Strapdown(ICloudTransformer):
 		self.cov = F @ self.cov @ F.t() + (B := N @ Q @ N.t())
 		self.kf_cov = F @ self.kf_cov @ F.t() + B
 		self._covchol = None
-
-	def transform(self, particles:torch.Tensor) -> torch.Tensor:
-		p = torch.concat((self.pos, self.zero_dtheta), dim=0)[...,None] + self.covchol @ particles[...,0:6,None]
-		return p[...,0]
-
-	def transform_as_pose(self, particles:torch.Tensor) -> RobotPose3D:
-		p = self.transform(particles)
-		p_xyz = p[:,0:3]
-		p_quat = quat_mult(pure_quat_exp(0.5*p[:,3:6]), self.quat)
-		p_mat = rot_scale_3d(torch.ones(p_quat.shape[:-1] + (3,), dtype=torch.float32, device='cuda'), p_quat)
-		return RobotPose3D(xyz_tran=p_xyz, mat_rot=p_mat)
-
-	# ICloudTransformer
-	def transform_cloud(self, cloud:torch.Tensor, particles:torch.Tensor=None) -> torch.Tensor:
-		poses = self.transform_as_pose(particles) if particles is not None else self.pose
-		return poses.xyz_tran[:,None,:] + (poses.mat_rot[:,None,:] @ cloud[None,:,:,None])[...,0]
 
 	def _update_common(self, y:torch.Tensor, y_cov:torch.Tensor, H:torch.Tensor) -> None:
 		K = self.cov @ H.t() @ torch.linalg.inv(H @ self.cov @ H.t() + y_cov)
