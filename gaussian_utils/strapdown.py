@@ -73,7 +73,7 @@ def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
 	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
 class Strapdown:
-	def __init__(self, want_uncertain_g=False, want_accel_bias=True, want_yaw_gyro_bias=False):
+	def __init__(self, accel_bias_std=1.0, gyro_bias_std=1.0, want_uncertain_g=False, want_yaw_gyro_bias=False):
 		self.state = torch.zeros((SD_statelen,), dtype=torch.float32, device='cuda')
 		self.state[I_g.start+2] = -9.80511
 		self.state[I_q.start] = 1
@@ -87,11 +87,8 @@ class Strapdown:
 			#self.cov[I_g.start+1,I_g.start+1] = 0.01**2
 			self.cov[I_g.start+2,I_g.start+2] = 0.2**2
 
-		if want_accel_bias:
-			self.cov[I_ab,I_ab].fill_diagonal_(0.01**2)
-			#self.cov[I_ab.start+2,I_ab.start+2] = 0
-
-		self.cov[I_wb,I_wb].fill_diagonal_((0.5*TAU/360)**2) # 0.01
+		self.cov[I_ab,I_ab].fill_diagonal_(accel_bias_std**2)
+		self.cov[I_wb,I_wb].fill_diagonal_((gyro_bias_std*TAU/360)**2)
 		if not want_yaw_gyro_bias: # Disable gyroscope yaw bias estimation when there isn't a reliable source of yaw
 			self.cov[I_wb.start+2,I_wb.start+2] = 0
 

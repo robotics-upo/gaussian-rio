@@ -73,8 +73,8 @@ class ImuRadarOdometry(Strapdown):
 
 		dtheta = 2*qerror[1:4]
 		dtheta_cov = np.zeros((3,3), dtype=np.float32)
-		dtheta_cov[0,0] = dtheta_cov[1,1] = (2*0.05)**2 # 2 sigma
-		dtheta_cov[2,2] = dtheta_cov[0,0] #(2*0.002)**2
+		dtheta_cov[0,0] = dtheta_cov[1,1] = (10*TAU/360)**2
+		dtheta_cov[2,2] = 10.0
 		dtheta_cov += qerrormat @ self.dtheta_cov.cpu().numpy() @ qerrormat.T
 		self.update_dtheta(dtheta, dtheta_cov)
 
@@ -135,10 +135,15 @@ class ImuRadarGicpOdometry(ImuRadarOdometry):
 	def has_empty_keyframe(self) -> bool:
 		return self.kf_cl is None
 
+	@property
+	def match_time(self) -> float:
+		return self.imu_time - self.mtime
+
 	def keyframe(self) -> None:
 		super().keyframe()
 		self.kf_cl   = self.last_cl
 		self.kf_tree = self.kf_tree
+		self.mtime   = self.imu_time
 
 	def process(self, bundle:RadarData) -> np.ndarray:
 		cl = super().process(bundle)
@@ -162,6 +167,8 @@ class ImuRadarGicpOdometry(ImuRadarOdometry):
 
 		relpose = RobotPose3D.from_xfrm(result.T_target_source[None])
 		self.update_pose_wrapper(self.kf_pose + relpose)
+
+		self.mtime = self.imu_time
 
 class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 	def __init__(self,
@@ -191,12 +198,17 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 	def has_empty_keyframe(self) -> bool:
 		return self.kf_model is None
 
+	@property
+	def match_time(self) -> float:
+		return self.imu_time - self.mtime
+
 	def keyframe(self) -> None:
 		super().keyframe()
 
 		cl = downsample_cloud(self.last_cl, self.fit_points, self.rng)
 		num_gaussians = int(0.5 + len(cl)/self.gaussian_size)
 
+		self.mtime    = self.imu_time
 		self.kf_model = GaussianModel(max_clusters=num_gaussians)
 		self.kf_model.add_cloud(cl)
 
@@ -240,6 +252,8 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 		#print('  OUTPOSE', new_relpose.xyz_tran[0].cpu().numpy())
 		#print('  LOSS', L)
 		self.update_pose_wrapper(new_pose)
+
+		self.mtime = self.imu_time
 
 	def transform(self, particles:torch.Tensor) -> torch.Tensor:
 		return (self.covchol @ particles[...,0:6,None])[...,0]
