@@ -24,6 +24,10 @@ class RadarData:
 	img  : np.ndarray
 
 	@property
+	def mean_accel(self) -> np.ndarray:
+		return np.mean([ x.accel for x in self.imu ], axis=0)
+
+	@property
 	def roll_pitch_g(self) -> Tuple[float,float,float]:
 		acc = np.stack([ x.accel for x in self.imu ], axis=0)
 		roll = np.arctan2(acc[:,1], acc[:,2])

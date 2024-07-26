@@ -73,7 +73,7 @@ def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
 	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
 class Strapdown:
-	def __init__(self, accel_bias_std=1.0, gyro_bias_std=1.0, want_uncertain_g=False, want_yaw_gyro_bias=False):
+	def __init__(self, accel_bias_std=1.0, gyro_bias_std=1.0, want_uncertain_rp=True, want_uncertain_g=False, want_yaw_gyro_bias=False):
 		self.state = torch.zeros((SD_statelen,), dtype=torch.float32, device='cuda')
 		self.state[I_g.start+2] = -9.80511
 		self.state[I_q.start] = 1
@@ -83,14 +83,15 @@ class Strapdown:
 		self._covchol = None
 
 		if want_uncertain_g:
-			#self.cov[I_g.start+0,I_g.start+0] = 0.01**2
-			#self.cov[I_g.start+1,I_g.start+1] = 0.01**2
 			self.cov[I_g.start+2,I_g.start+2] = 0.2**2
 
 		self.cov[I_ab,I_ab].fill_diagonal_(accel_bias_std**2)
 		self.cov[I_wb,I_wb].fill_diagonal_((gyro_bias_std*TAU/360)**2)
 		if not want_yaw_gyro_bias: # Disable gyroscope yaw bias estimation when there isn't a reliable source of yaw
 			self.cov[I_wb.start+2,I_wb.start+2] = 0
+
+		if want_uncertain_rp:
+			self.cov[I_dz.start+0,I_dz.start+0] = self.cov[I_dz.start+1,I_dz.start+1] = 10.0
 
 		self.I = torch.eye(SD_len, dtype=torch.float32, device='cuda')
 		self.zero_dtheta = torch.zeros((3,), dtype=torch.float32, device='cuda')
@@ -145,6 +146,10 @@ class Strapdown:
 	@property
 	def gravity(self) -> torch.Tensor:
 		return self.state[I_g]
+
+	@property
+	def antigravity(self) -> torch.Tensor:
+		return self.rotframe.t() @ (-self.gravity) + self.accel_bias
 
 	@property
 	def accel_bias(self) -> torch.Tensor:
@@ -226,6 +231,22 @@ class Strapdown:
 		self.cov = resetmat @ self.cov @ resetmat.t()
 		self.kf_cov = resetmat @ self.kf_cov @ resetmat.t()
 
+	def update_antigravity(self, ag:torch.Tensor, ag_cov:torch.Tensor) -> None:
+		R = self.rotframe
+		g = self.gravity
+		ag = torch.as_tensor(ag, dtype=torch.float32, device='cuda')
+		ag_cov = torch.as_tensor(ag_cov, dtype=torch.float32, device='cuda')
+		agnorm = torch.linalg.norm(ag)
+
+		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
+		H[:,I_g] = -R.t()
+		H[:,I_ab].fill_diagonal_(1)
+		H[:,I_dz.start+0] = R[2]*g[1] - R[1]*g[2]
+		H[:,I_dz.start+1] = R[0]*g[2] - R[2]*g[0]
+		H[:,I_dz.start+2] = R[1]*g[0] - R[0]*g[1]
+
+		self._update_common(ag/agnorm, ag_cov/(agnorm**2), H/torch.linalg.norm(self.antigravity))
+
 	def update_egovel(self, egovel:torch.Tensor, egovel_cov:torch.Tensor) -> None:
 		R = self.rotframe
 		v = self.state[I_v]
@@ -236,15 +257,6 @@ class Strapdown:
 		H[:,I_v] = R.t()
 
 		self._update_common(egovel, egovel_cov, H)
-
-	def update_dtheta(self, dtheta:torch.Tensor, dtheta_cov:torch.Tensor) -> None:
-		dtheta = torch.as_tensor(dtheta, dtype=torch.float32, device='cuda')
-		dtheta_cov = torch.as_tensor(dtheta_cov, dtype=torch.float32, device='cuda')
-
-		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
-		H[:,I_dz].fill_diagonal_(1)
-
-		self._update_common(dtheta, dtheta_cov, H)
 
 	def update_pose(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
 		pose = torch.as_tensor(pose, dtype=torch.float32, device='cuda')
