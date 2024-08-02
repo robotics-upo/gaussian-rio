@@ -140,6 +140,10 @@ class Strapdown:
 		return self.state[I_v]
 
 	@property
+	def egovel(self) -> torch.Tensor:
+		return self.rotframe.t() @ self.vel
+
+	@property
 	def quat(self) -> torch.Tensor:
 		return self.state[I_q]
 
@@ -211,12 +215,16 @@ class Strapdown:
 		self.kf_cov = F @ self.kf_cov @ F.t() + B
 		self._covchol = None
 
-	def _update_common(self, y:torch.Tensor, y_cov:torch.Tensor, H:torch.Tensor) -> None:
-		K = self.cov @ H.t() @ torch.linalg.inv(H @ self.cov @ H.t() + y_cov)
+	def _update_common(self, name:str, y:torch.Tensor, y_cov:torch.Tensor, H:torch.Tensor, is_residual:bool=False) -> None:
+		state = torch.concat((self.state[I_ekf], self.zero_dtheta), dim=0)
+		residual = y if is_residual else (y - H @ state)
+		Sinv = torch.linalg.inv(H @ self.cov @ H.t() + y_cov)
+		gamma = float(torch.flatten(residual[None] @ Sinv @ residual[:,None]))
+
+		K = self.cov @ H.t() @ Sinv
 		L = self.I - K @ H
 
-		state = torch.concat((self.state[I_ekf], self.zero_dtheta), dim=0)
-		state += K @ (y - H @ state)
+		state += K @ residual
 		self.state[I_ekf] = state[I_ekf]
 		self.cov = L @ self.cov @ L.t() + (B := K @ y_cov @ K.t())
 		self.kf_cov = L @ self.kf_cov @ L.t() + B
@@ -241,24 +249,25 @@ class Strapdown:
 		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
 		H[:,I_g] = -R.t()
 		H[:,I_ab].fill_diagonal_(1)
-		H[:,I_dz.start+0] = R[2]*g[1] - R[1]*g[2]
-		H[:,I_dz.start+1] = R[0]*g[2] - R[2]*g[0]
-		H[:,I_dz.start+2] = R[1]*g[0] - R[0]*g[1]
+		H[:,I_dz] = -R.t() @ skewsym(g)
 
-		self._update_common(ag/agnorm, ag_cov/(agnorm**2), H/torch.linalg.norm(self.antigravity))
+		self._update_common('ag', ag/agnorm, ag_cov/(agnorm**2), H/torch.linalg.norm(self.antigravity))
 
-	def update_egovel(self, egovel:torch.Tensor, egovel_cov:torch.Tensor) -> None:
+	def update_egovel(self, egovel:torch.Tensor, egovel_cov:torch.Tensor, radar_arm:torch.Tensor=None) -> None:
 		R = self.rotframe
 		v = self.state[I_v]
-		egovel = torch.as_tensor(egovel, dtype=torch.float32, device='cuda')
+		residual = torch.as_tensor(egovel, dtype=torch.float32, device='cuda') - self.egovel
 		egovel_cov = torch.as_tensor(egovel_cov, dtype=torch.float32, device='cuda')
 
 		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
 		H[:,I_v] = R.t()
+		H[:,I_dz] = R.t() @ skewsym(v)
+		if radar_arm is not None:
+			H[:,I_wb] = skewsym(radar_arm)
 
-		self._update_common(egovel, egovel_cov, H)
+		self._update_common('egovel', residual, egovel_cov, H, True)
 
-	def update_pose(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
+	def update_pose_6dof(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
 		pose = torch.as_tensor(pose, dtype=torch.float32, device='cuda')
 		pose_cov = torch.as_tensor(pose_cov, dtype=torch.float32, device='cuda')
 
@@ -266,4 +275,14 @@ class Strapdown:
 		H[0:3,I_p].fill_diagonal_(1)
 		H[3:6,I_dz].fill_diagonal_(1)
 
-		self._update_common(pose, pose_cov, H)
+		self._update_common('pose_6dof', pose, pose_cov, H)
+
+	def update_pose_3dof(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
+		pose = torch.as_tensor(pose, dtype=torch.float32, device='cuda')
+		pose_cov = torch.as_tensor(pose_cov, dtype=torch.float32, device='cuda')
+
+		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
+		H[0,I_p.start+0] = H[1,I_p.start+1] = 1
+		H[2,I_dz.start+2] = 1
+
+		self._update_common('pose_3dof', pose, pose_cov, H)

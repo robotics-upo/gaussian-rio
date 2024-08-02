@@ -19,17 +19,17 @@ TOPIC_LIST = [
 	CAM_TOPIC   := '/rgb_cam/image_raw/compressed',
 ]
 
-IMU_TO_RADAR = np.array([
-	[  0.999735807578,  -0.02148120581797, -0.00826995351904 ],
-	[ -0.0215215701795, -0.9997581134183,  -0.0048509797951  ],
-	[ -0.0081643477385,  0.00502853428037, -0.99995400578406 ],
+RADAR_TO_IMU = np.array([
+	[ 0.999735807578,   -0.0215215701795, -0.0081643477385,  -0.3176955976234  ],
+	[ 0.02148120581797,  0.9997581134183, -0.00502853428037,  0.13761019052125 ],
+	[ 0.00826995351904,  0.0048509797951,  0.99995400578406, -0.05898352725152 ],
 ], dtype=np.float32)
 
 GT_ROT_CORRECTIONS = {
-	'cp':    ( 0.25, -0.75, 0.0 ),
-	'nyl':   ( 1.75,  0.25, 0.0 ),
-	'loop1': (-0.65,  1.55, 0.0 ),
-	'loop2': ( 2.0,   3.0,  0.0 ),
+	'cp':    ( 0.0,  -0.30, 0.0 ),
+	'nyl':   ( 1.5,   0.65, 0.0 ),
+	'loop1': (-0.9,   2.0,  0.0 ),
+	'loop2': ( 1.75,  3.4,  0.0 ),
 }
 
 def load_ntu4dradlm_gt(basedir, seqid):
@@ -50,8 +50,8 @@ def load_ntu4dradlm_gt(basedir, seqid):
 
 def _parse_imu(msg: Imu):
 	t = msg.header.stamp.to_sec()
-	accel = IMU_TO_RADAR @ np.array([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z], dtype=np.float32)
-	omega = IMU_TO_RADAR @ np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float32)
+	accel = np.array([msg.linear_acceleration.x, -msg.linear_acceleration.y, -msg.linear_acceleration.z], dtype=np.float32)
+	omega = np.array([msg.angular_velocity.x,    -msg.angular_velocity.y,    -msg.angular_velocity.z],    dtype=np.float32)
 
 	accel_cov = np.array(msg.linear_acceleration_covariance, dtype=np.float32).reshape((3,3))
 	omega_cov = np.array(msg.angular_velocity_covariance,    dtype=np.float32).reshape((3,3))

@@ -7,18 +7,35 @@ from .utils import ICloudTransformer, quat_to_rpy, rpy_to_quat, quat_conj, quat_
 from .robot3d import RobotPose3D
 from .ops import rot_scale_3d
 from .model import GaussianModel
-from .strapdown import Strapdown, pure_quat_exp
+from .strapdown import Strapdown, pure_quat_exp, skewsym
 
 TAU = float(2*np.pi)
 
 class ImuRadarOdometry(Strapdown):
-	def __init__(self, seed=3135134162, *args, **kwargs):
+	def __init__(self, seed=3135134162, radar_to_imu=None, *args, **kwargs):
 		super().__init__(*args, **kwargs)
 		self.ref_time = None
 		self.imu_time = None
 		self.imu_rp = (0.0,0.0)
-		self.egovel = None
-		self.egovel_frame = np.eye(5, dtype=np.float32)
+		self.omega = torch.zeros(3, dtype=torch.float32, device='cuda')
+		self.saved_quat = self.quat.cpu().numpy()
+
+		if radar_to_imu is None:
+			self.radar_to_imu = torch.eye(4, dtype=torch.float32, device='cuda')[0:3]
+		else:
+			self.radar_to_imu = torch.as_tensor(radar_to_imu, dtype=torch.float32, device='cuda')[0:3,0:4]
+
+	@property
+	def radar_rot(self) -> torch.Tensor:
+		return self.radar_to_imu[:,0:3]
+
+	@property
+	def radar_arm(self) -> torch.Tensor:
+		return self.radar_to_imu[:,3]
+
+	@property
+	def egovel(self) -> torch.Tensor:
+		return super().egovel + skewsym(self.omega) @ self.radar_arm
 
 	@property
 	def is_initial(self) -> bool:
@@ -38,6 +55,10 @@ class ImuRadarOdometry(Strapdown):
 		self._process_imu(bundle)
 
 		cl = crop_radar_cloud(bundle.scan)
+
+		cl = np.copy(cl)
+		cl[:,0:3] = (self.radar_rot.cpu().numpy() @ cl[:,0:3,None])[...,0]
+
 		cl = self._process_egovel(cl, bundle.t)
 
 		return cl
@@ -46,7 +67,10 @@ class ImuRadarOdometry(Strapdown):
 		if self.is_initial or len(bundle.imu) == 0:
 			return
 
-		saved_quat = self.quat.cpu().numpy()
+		self.saved_quat = self.quat.cpu().numpy()
+
+		ag_cov = np.zeros((3,3), dtype=np.float32)
+		ag_cov[0,0] = ag_cov[1,1] = ag_cov[2,2] = 1.0**2
 
 		for imu in bundle.imu:
 			tdiff = imu.t - self.imu_time
@@ -56,39 +80,41 @@ class ImuRadarOdometry(Strapdown):
 			self.advance(tdiff, imu.accel, imu.accel_cov, imu.omega, imu.omega_cov)
 
 		imu_roll,imu_pitch,_ = bundle.roll_pitch_g
-		cur_quat = self.quat.cpu().numpy()
-
-		ag_cov = np.zeros((3,3), dtype=np.float32)
-		ag_cov[0,0] = ag_cov[1,1] = ag_cov[2,2] = 1.0**2 #0.4**2
+		self.imu_rp = (imu_roll,imu_pitch)
 		self.update_antigravity(bundle.mean_accel, ag_cov)
 
-		self.imu_rp = (imu_roll,imu_pitch)
-		self.egovel_frame[0:3,0:3] = quat_to_mat(quat_mult(self.quat.cpu().numpy(), quat_conj(saved_quat)))
+		self.omega = torch.as_tensor(bundle.mean_omega, dtype=torch.float32, device='cuda') - self.gyro_bias
 
-	def _process_egovel(self, cl:np.ndarray, t:float) -> np.ndarray:
+	def _calc_egoframe(self) -> np.ndarray:
+		return quat_to_mat(quat_mult(self.quat.cpu().numpy(), quat_conj(self.saved_quat)))
+
+	def _process_egovel(self, cl:np.ndarray, t:float, force_forward=True) -> np.ndarray:
+		if force_forward:
+			R = self._calc_egoframe()
+			egoframe = np.eye(cl.shape[1], dtype=np.float32)
+			egoframe[0:3,0:3] = R
+
 		try:
-			egovel, inliers = calc_radar_egovel(cl @ self.egovel_frame, force_forward=True)
+			egovel, inliers = calc_radar_egovel(cl @ egoframe if force_forward else cl, force_forward=force_forward)
 		except:
-			print('**WARNING**: egovel extraction fail')
+			print('  {WARN} Egovel extraction fail')
 			return cl
 
-		R = self.egovel_frame[0:3,0:3]
-		vel = R @ egovel.vel
-		vel_cov = R @ egovel.cov @ R.T
-
-		self.egovel = vel
+		if force_forward:
+			egovel.vel = R @ egovel.vel
+			egovel.cov = R @ egovel.cov @ R.T
 
 		if self.is_initial:
-			self.initialize(t, vel, vel_cov)
+			self.initialize(t, egovel.vel, egovel.cov)
 		else:
-			self.update_egovel(vel, vel_cov)
+			self.update_egovel(egovel.vel, egovel.cov, self.radar_arm)
 
 		if inliers is not None:
 			cl = cl[inliers]
 
 		return cl
 
-	def update_pose_wrapper(self, pose:RobotPose3D, xyzstd:float=1.0, angstd:float=0.1) -> None:
+	def update_pose_wrapper(self, pose:RobotPose3D, xyzstd:float=1.0, rotstd:float=6.0, restrict_3dof=True) -> None:
 		curquat = self.quat.cpu().numpy()
 		newquat = mat_to_quat(pose.mat_rot[0].cpu().numpy())
 		qerror = quat_mult(newquat, quat_conj(curquat))
@@ -96,14 +122,19 @@ class ImuRadarOdometry(Strapdown):
 
 		xyz = pose.xyz_tran[0].cpu().numpy()
 		dtheta = 2*qerror[1:4]
+		kfpose = np.concatenate((xyz, dtheta))
 
 		basecov = self.particle_keyframe_cov
 		noisecov = torch.zeros_like(basecov)
 		noisecov[0:3,0:3].fill_diagonal_(xyzstd**2)
-		noisecov[3:6,3:6].fill_diagonal_(angstd**2)
+		noisecov[3:6,3:6].fill_diagonal_((rotstd*TAU/360)**2)
+		kfcov = basecov + noisecov
 
-		kfpose = np.concatenate((xyz, dtheta))
-		self.update_pose(kfpose, basecov + noisecov)
+		if restrict_3dof:
+			dof = [0,1,5] # x/y/yaw
+			self.update_pose_3dof(kfpose[dof], kfcov[dof][:,dof])
+		else:
+			self.update_pose_6dof(kfpose, kfcov)
 
 class ImuRadarGicpOdometry(ImuRadarOdometry):
 	def __init__(self, voxel_size=0.25, *args, **kwargs):
