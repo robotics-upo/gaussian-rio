@@ -176,7 +176,7 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 		fit_points   :int=10000,
 		fit_thresh   :float=50.0,
 		reg_points   :int=5000,
-		num_particles:int=8,
+		num_particles:int=4,
 		*args, **kwargs
 	):
 		super().__init__(*args, want_yaw_gyro_bias=True, **kwargs)
@@ -210,6 +210,8 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 		self.mtime    = self.imu_time
 		self.kf_model = GaussianModel(max_clusters=num_gaussians)
 		self.kf_model.add_cloud(cl)
+		self.kf_loss  = float(self.kf_model.match_cloud(torch.as_tensor(cl, dtype=torch.float32, device='cuda')))
+		print('  {INFO} Keyframe baseline L=',self.kf_loss)
 
 	def process(self, bundle:RadarData) -> np.ndarray:
 		cl = super().process(bundle)
@@ -227,40 +229,33 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 
 		self.particlemean = self.pose - self.kf_pose
 
-		basecov = self.particle_keyframe_cov
-		particlecov = torch.zeros_like(basecov)
-		particlecov[0:3,0:3].fill_diagonal_(0.25**2)
-		particlecov[3:6,3:6].fill_diagonal_((10*TAU/360)**2)
-		self.set_particle_space(particlecov)
-
 		cl = downsample_cloud(cl, self.reg_points, self.rng)
 
 		swarm = self.rng.normal(size=(self.num_particles, 6))
 		swarm = torch.as_tensor(swarm, dtype=torch.float32, device='cuda')
 
 		best_particles, best_L, best_pid = self.kf_model.register(cl, swarm, self)
-		L = float(best_L[best_pid])
+		L = float(best_L[best_pid]) - self.kf_loss
 		if L >= self.fit_thresh:
 			print('  {WARN} Scan matching fail')
 			return
 
-		new_relpose = self.transform_as_pose(best_particles[None,best_pid])
-		new_pose = self.kf_pose + new_relpose
+		print('  {INFO} Scan matching OK, L=',L)
 
-		#print('  RELPOSE', self.particlemean.xyz_tran[0].cpu().numpy())
-		#print('  OUTPOSE', new_relpose.xyz_tran[0].cpu().numpy())
-		#print('  LOSS', L)
-		self.update_pose_wrapper(new_pose)
+		relpose = self.transform_as_pose(best_particles[None,best_pid])
+		self.update_pose_wrapper(relpose)
 
 		self.mtime = self.imu_time
 
 	def transform(self, particles:torch.Tensor) -> torch.Tensor:
-		return (self.covchol @ particles[...,0:6,None])[...,0]
+		p_xyz = 1.0*particles[...,0:3]
+		p_rot = (6.0*TAU/360)*particles[...,3:6]
+		return torch.cat((p_xyz, p_rot), dim=-1)
 
 	def transform_as_pose(self, particles:torch.Tensor) -> RobotPose3D:
 		p = self.transform(particles)
-		p_xyz = p[:,0:3]
-		p_quat = pure_quat_exp(0.5*p[:,3:6])
+		p_xyz = p[...,0:3]
+		p_quat = pure_quat_exp(0.5*p[...,3:6])
 		p_mat = rot_scale_3d(torch.ones(p_quat.shape[:-1] + (3,), dtype=torch.float32, device='cuda'), p_quat)
 		return self.particlemean + RobotPose3D(xyz_tran=p_xyz, mat_rot=p_mat)
 
