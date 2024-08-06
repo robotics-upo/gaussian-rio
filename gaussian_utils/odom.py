@@ -115,26 +115,10 @@ class ImuRadarOdometry(Strapdown):
 		return cl
 
 	def update_pose_wrapper(self, pose:RobotPose3D, xyzstd:float=1.0, rotstd:float=6.0, restrict_3dof=True) -> None:
-		curquat = self.quat.cpu().numpy()
-		newquat = mat_to_quat(pose.mat_rot[0].cpu().numpy())
-		qerror = quat_mult(newquat, quat_conj(curquat))
-		qerror /= qerror[0] # ensure w=1 (and also fix signs)
-
-		xyz = pose.xyz_tran[0].cpu().numpy()
-		dtheta = 2*qerror[1:4]
-		kfpose = np.concatenate((xyz, dtheta))
-
-		basecov = self.particle_keyframe_cov
-		noisecov = torch.zeros_like(basecov)
-		noisecov[0:3,0:3].fill_diagonal_(xyzstd**2)
-		noisecov[3:6,3:6].fill_diagonal_((rotstd*TAU/360)**2)
-		kfcov = basecov + noisecov
-
-		if restrict_3dof:
-			dof = [0,1,5] # x/y/yaw
-			self.update_pose_3dof(kfpose[dof], kfcov[dof][:,dof])
-		else:
-			self.update_pose_6dof(kfpose, kfcov)
+		cov = torch.zeros((6,6), dtype=torch.float32, device='cuda')
+		cov[0:3,0:3].fill_diagonal_(xyzstd**2)
+		cov[3:6,3:6].fill_diagonal_((rotstd*TAU/360)**2)
+		self.update_scanmatch(pose, cov, [0,1,5] if restrict_3dof else None)
 
 class ImuRadarGicpOdometry(ImuRadarOdometry):
 	def __init__(self, voxel_size=0.25, *args, **kwargs):
@@ -181,7 +165,7 @@ class ImuRadarGicpOdometry(ImuRadarOdometry):
 			return
 
 		relpose = RobotPose3D.from_xfrm(result.T_target_source[None])
-		self.update_pose_wrapper(self.kf_pose + relpose)
+		self.update_pose_wrapper(relpose)
 
 		self.mtime = self.imu_time
 

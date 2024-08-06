@@ -3,6 +3,7 @@ import numpy as np
 
 from .ops import rot_scale_3d
 from .robot3d import RobotPose3D
+from .utils import mat_to_quat
 
 import itertools
 from typing import List, Tuple, NamedTuple
@@ -28,22 +29,9 @@ W_z = slice(3,6)  # Attitude error process noise (world-space)
 W_a = slice(6,9)  # Accelerometer noise (body-space)
 W_w = slice(9,12) # Gyroscope noise (body-space)
 
-F_p  = slice(0,3)
-F_q  = slice(3,7)
-F_dz = slice(3,6)
-F_len = F_dz.stop
-
 SD_statelen = I_q.stop
 SD_len = I_dz.stop
 SD_noiselen = W_w.stop
-
-def slices_to_indices(*args:List[slice]) -> List[int]:
-	return list(itertools.chain(*(range(x.start, x.stop) for x in args)))
-
-SD_to_F = slices_to_indices(I_p, I_dz)
-
-def particle_cov(cov: torch.Tensor) -> torch.Tensor:
-	return cov[SD_to_F][:,SD_to_F]
 
 def skewsym(v: torch.Tensor) -> torch.Tensor:
 	x,y,z = float(v[0]),float(v[1]),float(v[2])
@@ -80,7 +68,6 @@ class Strapdown:
 		self._rotframe = None
 
 		self.cov = torch.zeros((SD_len,SD_len), dtype=torch.float32, device='cuda')
-		self._covchol = None
 
 		if want_uncertain_g:
 			self.cov[I_g.start+2,I_g.start+2] = 0.2**2
@@ -100,7 +87,7 @@ class Strapdown:
 
 	def keyframe(self) -> None:
 		self.kf_pose = self.pose
-		self.kf_cov = torch.zeros_like(self.cov)
+		self.kf_cov = self.cov
 		self.kf_frame = self.rotframe
 
 	@property
@@ -112,24 +99,6 @@ class Strapdown:
 	@property
 	def pose(self) -> RobotPose3D:
 		return RobotPose3D(xyz_tran=self.pos[None].clone(), mat_rot=self.rotframe[None])
-
-	def set_particle_space(self, cov:torch.Tensor) -> None:
-		cov = torch.as_tensor(cov, dtype=torch.float32, device='cuda')
-		self._covchol = torch.linalg.cholesky(cov + 1e-4 * torch.eye(F_len, dtype=torch.float32, device='cuda'))
-
-	@property
-	def covchol(self) -> torch.Tensor:
-		if self._covchol is None:
-			self.set_particle_space(self.particle_child_cov)
-		return self._covchol
-
-	@property
-	def particle_keyframe_cov(self) -> torch.Tensor:
-		return particle_cov(self.cov - self.kf_cov)
-
-	@property
-	def particle_child_cov(self) -> torch.Tensor:
-		return particle_cov(self.kf_cov)
 
 	@property
 	def pos(self) -> torch.Tensor:
@@ -173,7 +142,6 @@ class Strapdown:
 
 		self.state[I_v] = vel
 		self.cov[I_v,I_v] = vel_cov
-		self._covchol = None
 
 	def advance(self, timediff:float, accel:torch.Tensor, accel_cov:torch.Tensor, omega:torch.Tensor, omega_cov:torch.Tensor):
 		accel = torch.as_tensor(accel, dtype=torch.float32, device='cuda') - self.state[I_ab]
@@ -211,9 +179,7 @@ class Strapdown:
 		N[I_v,W_a] = N[I_dz,W_w] = R*timediff
 		N[I_dz,W_z].fill_diagonal_(1)
 
-		self.cov = F @ self.cov @ F.t() + (B := N @ Q @ N.t())
-		self.kf_cov = F @ self.kf_cov @ F.t() + B
-		self._covchol = None
+		self.cov = F @ self.cov @ F.t() + N @ Q @ N.t()
 
 	def _update_common(self, name:str, y:torch.Tensor, y_cov:torch.Tensor, H:torch.Tensor, is_residual:bool=False) -> None:
 		state = torch.concat((self.state[I_ekf], self.zero_dtheta), dim=0)
@@ -226,9 +192,7 @@ class Strapdown:
 
 		state += K @ residual
 		self.state[I_ekf] = state[I_ekf]
-		self.cov = L @ self.cov @ L.t() + (B := K @ y_cov @ K.t())
-		self.kf_cov = L @ self.kf_cov @ L.t() + B
-		self._covchol = None
+		self.cov = L @ self.cov @ L.t() + K @ y_cov @ K.t()
 
 		# ESKF reset
 		self.state[I_q] = quat_mult(qerr:=pure_quat_exp(0.5*state[I_dz]), self.state[I_q])
@@ -237,7 +201,6 @@ class Strapdown:
 		resetmat = torch.eye(SD_len, dtype=torch.float32, device='cuda')
 		resetmat[I_dz,I_dz] = quat_to_mat(qerr)
 		self.cov = resetmat @ self.cov @ resetmat.t()
-		self.kf_cov = resetmat @ self.kf_cov @ resetmat.t()
 
 	def update_antigravity(self, ag:torch.Tensor, ag_cov:torch.Tensor) -> None:
 		R = self.rotframe
@@ -267,22 +230,24 @@ class Strapdown:
 
 		self._update_common('egovel', residual, egovel_cov, H, True)
 
-	def update_pose_6dof(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
-		pose = torch.as_tensor(pose, dtype=torch.float32, device='cuda')
-		pose_cov = torch.as_tensor(pose_cov, dtype=torch.float32, device='cuda')
+	def update_scanmatch(self, pose:RobotPose3D, pose_cov:torch.Tensor, dof:List[int]=None) -> None:
+		predpose = self.pose - self.kf_pose
+		diff_xyz = pose.xyz_tran[0] - predpose.xyz_tran[0]
+		diff_rot = predpose.mat_rot[0].t() @ pose.mat_rot[0]
+		diff_q = mat_to_quat(diff_rot.cpu().numpy())
+		diff_q /= diff_q[0] # ensure w=1 (and also fix signs)
+		diff_dz = torch.as_tensor(2*diff_q[1:4], dtype=torch.float32, device='cuda')
+
+		residual = torch.concat((diff_xyz, diff_dz), dim=0)
 
 		H = torch.zeros((6,SD_len), dtype=torch.float32, device='cuda')
-		H[0:3,I_p].fill_diagonal_(1)
-		H[3:6,I_dz].fill_diagonal_(1)
+		H[0:3,I_p] = H[3:6,I_dz] = self.kf_frame.t()
 
-		self._update_common('pose_6dof', pose, pose_cov, H)
+		pose_cov = torch.as_tensor(pose_cov, dtype=torch.float32, device='cuda') + H @ self.kf_cov @ H.t()
 
-	def update_pose_3dof(self, pose:torch.Tensor, pose_cov:torch.Tensor) -> None:
-		pose = torch.as_tensor(pose, dtype=torch.float32, device='cuda')
-		pose_cov = torch.as_tensor(pose_cov, dtype=torch.float32, device='cuda')
+		if dof is not None:
+			residual = residual[dof]
+			pose_cov = pose_cov[dof][:,dof]
+			H = H[dof]
 
-		H = torch.zeros((3,SD_len), dtype=torch.float32, device='cuda')
-		H[0,I_p.start+0] = H[1,I_p.start+1] = 1
-		H[2,I_dz.start+2] = 1
-
-		self._update_common('pose_3dof', pose, pose_cov, H)
+		self._update_common('scanmatch', residual, pose_cov, H, True)
