@@ -12,6 +12,7 @@ class GaussianModel:
 	def __init__(self,
 		max_clusters:int=150,
 		disc_thickness:float=0.15,
+		min_std:float=0.05,
 		mahal_thresh:float=2.0,
 		fit_params:GradientDescentParams=GradientDescentParams(
 			lr=0.05,
@@ -30,6 +31,7 @@ class GaussianModel:
 	):
 		self.max_clusters = max_clusters
 		self.log_disc_thickness = float(np.log(disc_thickness))
+		self.scale_baseline = float(np.log(min_std))
 		self.mahal2_thresh = mahal_thresh*mahal_thresh
 		self._fit = fit_params
 		self._reg = register_params
@@ -46,11 +48,11 @@ class GaussianModel:
 
 	@property
 	def scales(self) -> torch.Tensor:
-		return torch.exp(self.log_scales)
+		return torch.exp(self.log_scales + self.scale_baseline)
 
 	@property
 	def inverse_scales(self) -> torch.Tensor:
-		return torch.exp(-self.log_scales)
+		return torch.exp(-(self.log_scales + self.scale_baseline))
 
 	@property
 	def inverse_quats(self) -> torch.Tensor:
@@ -77,7 +79,7 @@ class GaussianModel:
 		new_centers = torch.as_tensor(new_centers, dtype=torch.float32, device='cuda')
 
 		def create_log_scales(N):
-			return torch.zeros((N, 3), dtype=torch.float32, device='cuda')
+			return torch.full((N, 3), -self.scale_baseline, dtype=torch.float32, device='cuda')
 
 		def create_quats(N):
 			q = torch.zeros((N, 4), dtype=torch.float32, device='cuda')
@@ -131,7 +133,8 @@ class GaussianModel:
 
 			for epoch in range(self._fit.max_epochs):
 				# Parametrize
-				g_invmats = rot_scale_3d(torch.exp(-g_log_scales), torch.nn.functional.normalize(g_quats), scale_first=False)
+				g_reallogscale = torch.nn.functional.relu(g_log_scales)+self.scale_baseline
+				g_invmats = rot_scale_3d(torch.exp(-g_reallogscale), torch.nn.functional.normalize(g_quats), scale_first=False)
 
 				# Calculate vectors from every gaussian center to every point
 				cl_tran, cl_gidx = nearest_center_3d(cloud, g_centers)
@@ -142,8 +145,8 @@ class GaussianModel:
 				g_mahal2 = torch.zeros((len(g_centers),), dtype=torch.float32, device='cuda')
 				g_mahal2.scatter_reduce_(0, cl_gidx, cl_mahal2, reduce='mean')
 
-				L1 = 0.5*g_mahal2 + torch.sum(g_log_scales, dim=1)
-				L2 = torch.nn.functional.relu(torch.min(g_log_scales, axis=1)[0] - self.log_disc_thickness)
+				L1 = 0.5*g_mahal2 + torch.sum(g_reallogscale, dim=1)
+				L2 = torch.nn.functional.relu(torch.min(g_reallogscale, axis=1)[0] - self.log_disc_thickness)
 				L = torch.mean(L1 + L2)
 
 				#print(f'Epoch {1+epoch} L={float(L):.4f}')
