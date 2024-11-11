@@ -13,7 +13,7 @@ class GaussianModel:
 		max_clusters:int=150,
 		disc_thickness:float=0.15,
 		min_std:float=0.05,
-		mahal_thresh:float=2.0,
+		mahal_thresh:float=4.0,
 		fit_params:GradientDescentParams=GradientDescentParams(
 			lr=0.05,
 			eps=1e-15,
@@ -173,6 +173,7 @@ class GaussianModel:
 
 	def match_cloud(self, cl_reg:torch.Tensor):
 		cl_sqmahal, _ = nearest_gaussian_3d(cl_reg.reshape(-1,3), self.centers, self.inverse_matrices)
+		cl_sqmahal = torch.minimum(cl_sqmahal, torch.as_tensor(self.mahal2_thresh, dtype=torch.float32, device='cuda'))
 		return torch.mean(cl_sqmahal)
 
 	def register(self, cloud:Union[np.ndarray,torch.Tensor], swarm:Union[np.ndarray,torch.Tensor], xfrm:ICloudTransformer) -> Tuple[torch.Tensor, torch.Tensor, int]:
@@ -191,6 +192,7 @@ class GaussianModel:
 
 				cl_sqmahal, _ = nearest_gaussian_3d(cl_reg.reshape(-1,3), self.centers, g_invmat)
 				cl_sqmahal = cl_sqmahal.reshape(swarm.shape[0], -1)
+				cl_sqmahal = torch.minimum(cl_sqmahal, torch.as_tensor(self.mahal2_thresh, dtype=torch.float32, device='cuda'))
 
 				L_batch = torch.mean(cl_sqmahal, dim=-1)
 				L_batch_nograd = L_batch.detach()
