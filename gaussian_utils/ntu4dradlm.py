@@ -32,6 +32,12 @@ GT_ROT_CORRECTIONS = {
 	'loop2': ( 1.75,  3.4,  0.0 ),
 }
 
+ACCEL_NOISE_STD = 0.0022281160035059417
+ACCEL_RWALK_STD = 0.00011782392708033614
+
+GYRO_NOISE_STD = 0.00011667951042710442
+GYRO_RWALK_STD = 2.616129872371749e-06
+
 def load_ntu4dradlm_gt(basedir, seqid):
 	mat = np.loadtxt(f'{basedir}/{seqid}/gt_odom.txt', dtype=np.float64)
 
@@ -53,8 +59,11 @@ def _parse_imu(msg: Imu):
 	accel = np.array([msg.linear_acceleration.x, -msg.linear_acceleration.y, -msg.linear_acceleration.z], dtype=np.float32)
 	omega = np.array([msg.angular_velocity.x,    -msg.angular_velocity.y,    -msg.angular_velocity.z],    dtype=np.float32)
 
-	accel_cov = np.array(msg.linear_acceleration_covariance, dtype=np.float32).reshape((3,3))
-	omega_cov = np.array(msg.angular_velocity_covariance,    dtype=np.float32).reshape((3,3))
+	#accel_cov = np.array(msg.linear_acceleration_covariance, dtype=np.float32).reshape((3,3))
+	#omega_cov = np.array(msg.angular_velocity_covariance,    dtype=np.float32).reshape((3,3))
+
+	accel_cov = (ACCEL_NOISE_STD**2) * np.eye(3, dtype=np.float32)
+	omega_cov = ( GYRO_NOISE_STD**2) * np.eye(3, dtype=np.float32)
 
 	return ImuData(t=t, accel=accel, accel_cov=accel_cov, omega=omega, omega_cov=omega_cov)
 

@@ -61,7 +61,15 @@ def pure_quat_exp(w: torch.Tensor) -> torch.Tensor:
 	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
 
 class Strapdown:
-	def __init__(self, accel_bias_std=1.0, gyro_bias_std=1.0, want_uncertain_rp=True, want_uncertain_g=False, want_yaw_gyro_bias=False):
+	def __init__(self,
+		accel_init_bias_std=1.0,
+		gyro_init_bias_std=TAU/360,
+		accel_bias_std=0.0,
+		gyro_bias_std=0.0,
+		want_uncertain_rp=True,
+		want_uncertain_g=False,
+		want_yaw_gyro_bias=False
+	):
 		self.state = torch.zeros((SD_statelen,), dtype=torch.float32, device='cuda')
 		self.state[I_g.start+2] = -9.80511
 		self.state[I_q.start] = 1
@@ -72,8 +80,11 @@ class Strapdown:
 		if want_uncertain_g:
 			self.cov[I_g.start+2,I_g.start+2] = 0.2**2
 
-		self.cov[I_ab,I_ab].fill_diagonal_(accel_bias_std**2)
-		self.cov[I_wb,I_wb].fill_diagonal_((gyro_bias_std*TAU/360)**2)
+		self.accel_bias_var = accel_bias_std**2
+		self.gyro_bias_var = gyro_bias_std**2
+
+		self.cov[I_ab,I_ab].fill_diagonal_(accel_init_bias_std**2)
+		self.cov[I_wb,I_wb].fill_diagonal_(gyro_init_bias_std**2)
 		if not want_yaw_gyro_bias: # Disable gyroscope yaw bias estimation when there isn't a reliable source of yaw
 			self.cov[I_wb.start+2,I_wb.start+2] = 0
 
@@ -170,8 +181,8 @@ class Strapdown:
 		Q = torch.zeros((SD_noiselen,SD_noiselen), dtype=torch.float32, device='cuda')
 		Q[W_v,W_v].fill_diagonal_(0.1**2) # 0.05
 		Q[W_z,W_z].fill_diagonal_(0.005**2) # 0.01
-		Q[W_a,W_a] = accel_cov
-		Q[W_w,W_w] = omega_cov
+		Q[W_a,W_a] = accel_cov/timediff
+		Q[W_w,W_w] = omega_cov/timediff
 
 		N = torch.zeros((SD_len,SD_noiselen), dtype=torch.float32, device='cuda')
 		N[I_p,W_a] = 0.5*R*timediff**2
@@ -180,6 +191,10 @@ class Strapdown:
 		N[I_dz,W_z].fill_diagonal_(1)
 
 		self.cov = F @ self.cov @ F.t() + N @ Q @ N.t()
+
+		I3 = self.I[0:3,0:3]
+		self.cov[I_ab,I_ab] += I3 * (self.accel_bias_var*timediff)
+		self.cov[I_wb,I_wb] += I3 * ( self.gyro_bias_var*timediff)
 
 	def _update_common(self, name:str, y:torch.Tensor, y_cov:torch.Tensor, H:torch.Tensor, is_residual:bool=False) -> None:
 		state = torch.concat((self.state[I_ekf], self.zero_dtheta), dim=0)
