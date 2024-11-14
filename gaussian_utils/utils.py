@@ -63,7 +63,7 @@ def mat_ortho(mat: torch.Tensor):
 	sign,_ = torch.linalg.slogdet(U @ Vt)
 	return U @ torch.cat((Vt[..., :2, :], sign[...,None,None]*Vt[..., -1:, :]), dim=-2)
 
-def mat_to_quat(mat: np.array):
+def mat_to_quat(mat: np.ndarray) -> np.ndarray:
 	tx,ty,tz = mat[0,0],mat[1,1],mat[2,2]
 	if tz <= 0:
 		if tx >= ty:
@@ -90,7 +90,7 @@ def mat_to_quat(mat: np.array):
 	q = np.stack([w,x,y,z], axis=-1)
 	return q / np.linalg.norm(q)
 
-def quat_to_mat(q: np.ndarray):
+def quat_to_mat(q: np.ndarray) -> np.ndarray:
 	qxx = q[...,1] * q[...,1]
 	qyy = q[...,2] * q[...,2]
 	qzz = q[...,3] * q[...,3]
@@ -109,7 +109,7 @@ def quat_to_mat(q: np.ndarray):
 
 	return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
 
-def mat_to_zrot_normal(mat: np.array):
+def mat_to_zrot_normal(mat: np.ndarray):
 	xlate = mat[...,0:3,3]
 	normals = mat[...,0:3,2]
 	normals = normals[...,0:2] / normals[...,2,None]
@@ -131,13 +131,13 @@ def nzrot_to_mat(nzrot: torch.Tensor):
 
 	return torch.concat([x_axis, y_axis, z_axis], dim=-2)
 
-def quat_to_z(quat: np.array):
+def quat_to_z(quat: np.ndarray):
 	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
 	siny_cosp = 2*(qw*qz + qx*qy)
 	cosy_cosp = 1 - 2*(qy*qy + qz*qz)
 	return np.arctan2(siny_cosp, cosy_cosp)
 
-def quat_to_rpy(quat: np.array):
+def quat_to_rpy(quat: np.ndarray):
 	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
 
 	# roll (x-axis rotation)
@@ -157,7 +157,7 @@ def quat_to_rpy(quat: np.array):
 
 	return np.stack((roll,pitch,yaw), axis=-1)
 
-def rpy_to_quat(rpy: np.array):
+def rpy_to_quat(rpy: np.ndarray):
 	r,p,y = rpy[...,0]/2, rpy[...,1]/2, rpy[...,2]/2
 
 	cosr,sinr = np.cos(r),np.sin(r)
@@ -171,7 +171,7 @@ def rpy_to_quat(rpy: np.array):
 		cosr*cosp*siny - sinr*sinp*cosy,
 	], axis=-1)
 
-def quat_mult(q0:np.array, q1:np.array):
+def quat_mult(q0:np.ndarray, q1:np.ndarray) -> np.ndarray:
 	w0,x0,y0,z0 = q0[...,0], q0[...,1], q0[...,2], q0[...,3]
 	w1,x1,y1,z1 = q1[...,0], q1[...,1], q1[...,2], q1[...,3]
 	return np.stack([
@@ -181,23 +181,37 @@ def quat_mult(q0:np.array, q1:np.array):
 		w0*z1 + z0*w1 + x0*y1 - y0*x1,
 	], axis=-1)
 
-def quat_vec_mult(q:np.array, v:np.array):
+def quat_vec_mult(q:np.ndarray, v:np.ndarray):
 	qv = q[...,1:4]
 	qw = q[...,0,None]
 	uv = np.cross(qv, v)
 	uuv = np.cross(qv, uv)
 	return v + 2*(qw*uv + uuv)
 
-def crop_cloud(cl: np.array, mindist:float=1.5, maxdist:float=30.0):
+def pure_quat_exp(w: np.ndarray) -> np.ndarray:
+	norm = np.linalg.norm(w, axis=-1)
+	qw,sinc = np.cos(norm), np.sinc(norm / (0.5*TAU))
+	qv = w*sinc[...,None]
+	return np.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], axis=-1)
+
+def skewsym(omega:np.ndarray) -> np.ndarray:
+	x,y,z = omega[0],omega[1],omega[2]
+	return np.asarray([
+		[ 0.0, -z, +y ],
+		[ +z, 0.0, -x ],
+		[ -y, +x, 0.0 ],
+	], dtype=omega.dtype)
+
+def crop_cloud(cl: np.ndarray, mindist:float=1.5, maxdist:float=30.0):
 	cldist = np.linalg.norm(cl[:,0:2], axis=1)
 	return cl[(mindist <= cldist) & (cldist <= maxdist), :]
 
-def downsample_cloud(cl: np.array, num_points:int, rng:Union[np.random.Generator,int]=None):
+def downsample_cloud(cl: np.ndarray, num_points:int, rng:Union[np.random.Generator,int]=None):
 	if len(cl) <= num_points: return cl
 	if rng is None or type(rng) is int: rng = np.random.default_rng(seed=rng)
 	return rng.choice(cl, num_points, replace=False)
 
-def downsample_floor(cl: np.array, z_plane:float = -1.25, floor_ratio = 0.5, rng:Union[np.random.Generator,int]=None) -> np.array:
+def downsample_floor(cl: np.ndarray, z_plane:float = -1.25, floor_ratio = 0.5, rng:Union[np.random.Generator,int]=None) -> np.ndarray:
 	is_floor = cl[:,2] <= z_plane
 	num_floor_points = int(np.sum(is_floor))
 
