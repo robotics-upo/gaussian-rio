@@ -18,6 +18,12 @@ class RobotPose3D(NamedTuple):
 	mat_rot  :torch.Tensor
 
 	@staticmethod
+	def from_tran_rot(tran:torch.Tensor, rot:torch.Tensor) -> Self:
+		tran = torch.as_tensor(tran, dtype=torch.float32, device='cuda')[None]
+		rot  = torch.as_tensor(rot,  dtype=torch.float32, device='cuda')[None]
+		return RobotPose3D(xyz_tran=tran, mat_rot=rot)
+
+	@staticmethod
 	def from_xfrm(xfrm:torch.Tensor) -> Self:
 		xfrm = torch.as_tensor(xfrm, dtype=torch.float32, device='cuda')
 		return RobotPose3D(xyz_tran=xfrm[:,0:3,3], mat_rot=xfrm[:,0:3,0:3])
