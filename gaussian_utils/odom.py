@@ -3,11 +3,11 @@ import numpy as np
 import small_gicp
 
 from .radar import ImuData, RadarData, crop_radar_cloud, calc_radar_egovel
-from .utils import ICloudTransformer, quat_to_rpy, rpy_to_quat, quat_conj, quat_mult, quat_to_mat, mat_to_quat, downsample_cloud
+from .utils import ICloudTransformer, skewsym, quat_to_rpy, rpy_to_quat, quat_conj, quat_mult, quat_to_mat, mat_to_quat, pure_quat_exp_tensor, downsample_cloud
 from .robot3d import RobotPose3D
 from .ops import rot_scale_3d
 from .model import GaussianModel
-from .strapdown import Strapdown, pure_quat_exp, skewsym
+from .strapdown import Strapdown
 
 TAU = float(2*np.pi)
 
@@ -17,25 +17,25 @@ class ImuRadarOdometry(Strapdown):
 		self.ref_time = None
 		self.imu_time = None
 		self.imu_rp = (0.0,0.0)
-		self.omega = torch.zeros(3, dtype=torch.float32, device='cuda')
-		self.saved_quat = self.quat.cpu().numpy()
+		self.omega = np.zeros(3, dtype=np.float64)
+		self.saved_quat = self.quat
 
 		if radar_to_imu is None:
-			self.radar_to_imu = torch.eye(4, dtype=torch.float32, device='cuda')[0:3]
+			self.radar_to_imu = np.eye(4, dtype=np.float64)[0:3]
 		else:
-			self.radar_to_imu = torch.as_tensor(radar_to_imu, dtype=torch.float32, device='cuda')[0:3,0:4]
+			self.radar_to_imu = np.asarray(radar_to_imu, dtype=np.float64)[0:3,0:4]
 
 	@property
-	def radar_rot(self) -> torch.Tensor:
+	def radar_rot(self) -> np.ndarray:
 		return self.radar_to_imu[:,0:3]
 
 	@property
-	def radar_arm(self) -> torch.Tensor:
-		return self.radar_to_imu[:,3]
+	def radar_arm(self) -> np.ndarray:
+		return None #self.radar_to_imu[:,3]
 
 	@property
-	def egovel(self) -> torch.Tensor:
-		return super().egovel + skewsym(self.omega) @ self.radar_arm
+	def egovel(self) -> np.ndarray:
+		return super().egovel #+ skewsym(self.omega) @ self.radar_arm
 
 	@property
 	def is_initial(self) -> bool:
@@ -57,7 +57,7 @@ class ImuRadarOdometry(Strapdown):
 		cl = crop_radar_cloud(bundle.scan)
 
 		cl = np.copy(cl)
-		cl[:,0:3] = (self.radar_rot.cpu().numpy() @ cl[:,0:3,None])[...,0]
+		cl[:,0:3] = (self.radar_rot @ cl[:,0:3,None])[...,0]
 
 		cl = self._process_egovel(cl, bundle.t)
 
@@ -67,9 +67,9 @@ class ImuRadarOdometry(Strapdown):
 		if self.is_initial or len(bundle.imu) == 0:
 			return
 
-		self.saved_quat = self.quat.cpu().numpy()
+		self.saved_quat = self.quat
 
-		ag_cov = np.zeros((3,3), dtype=np.float32)
+		ag_cov = np.zeros((3,3), dtype=np.float64)
 		ag_cov[0,0] = ag_cov[1,1] = ag_cov[2,2] = 1.0**2
 
 		for imu in bundle.imu:
@@ -81,17 +81,17 @@ class ImuRadarOdometry(Strapdown):
 
 		imu_roll,imu_pitch,_ = bundle.roll_pitch_g
 		self.imu_rp = (imu_roll,imu_pitch)
-		self.update_antigravity(bundle.mean_accel, ag_cov)
+		#self.update_antigravity(bundle.mean_accel, ag_cov)
 
-		self.omega = torch.as_tensor(bundle.mean_omega, dtype=torch.float32, device='cuda') - self.gyro_bias
+		self.omega = np.asarray(bundle.mean_omega, dtype=np.float64) - self.gyro_bias
 
 	def _calc_egoframe(self) -> np.ndarray:
-		return quat_to_mat(quat_mult(self.quat.cpu().numpy(), quat_conj(self.saved_quat)))
+		return quat_to_mat(quat_mult(self.quat, quat_conj(self.saved_quat)))
 
-	def _process_egovel(self, cl:np.ndarray, t:float, force_forward=True) -> np.ndarray:
+	def _process_egovel(self, cl:np.ndarray, t:float, force_forward=False) -> np.ndarray:
 		if force_forward:
 			R = self._calc_egoframe()
-			egoframe = np.eye(cl.shape[1], dtype=np.float32)
+			egoframe = np.eye(cl.shape[1], dtype=np.float64)
 			egoframe[0:3,0:3] = R
 
 		try:
@@ -115,9 +115,9 @@ class ImuRadarOdometry(Strapdown):
 		return cl
 
 	def update_pose_wrapper(self, pose:RobotPose3D, xyzstd:float=1.0, rotstd:float=6.0, restrict_3dof=True) -> None:
-		cov = torch.zeros((6,6), dtype=torch.float32, device='cuda')
-		cov[0:3,0:3].fill_diagonal_(xyzstd**2)
-		cov[3:6,3:6].fill_diagonal_((rotstd*TAU/360)**2)
+		cov = np.zeros((6,6), dtype=np.float64)
+		np.fill_diagonal(cov[0:3,0:3], xyzstd**2)
+		np.fill_diagonal(cov[3:6,3:6], (rotstd*TAU/360)**2)
 		self.update_scanmatch(pose, cov, [0,1,5] if restrict_3dof else None)
 
 class ImuRadarGicpOdometry(ImuRadarOdometry):
@@ -255,7 +255,7 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 	def transform_as_pose(self, particles:torch.Tensor) -> RobotPose3D:
 		p = self.transform(particles)
 		p_xyz = p[...,0:3]
-		p_quat = pure_quat_exp(0.5*p[...,3:6])
+		p_quat = pure_quat_exp_tensor(0.5*p[...,3:6])
 		p_mat = rot_scale_3d(torch.ones(p_quat.shape[:-1] + (3,), dtype=torch.float32, device='cuda'), p_quat)
 		return self.particlemean + RobotPose3D(xyz_tran=p_xyz, mat_rot=p_mat)
 

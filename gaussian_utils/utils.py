@@ -194,6 +194,12 @@ def pure_quat_exp(w: np.ndarray) -> np.ndarray:
 	qv = w*sinc[...,None]
 	return np.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], axis=-1)
 
+def pure_quat_exp_tensor(w: torch.Tensor) -> torch.Tensor:
+	norm = torch.linalg.norm(w, dim=-1)
+	qw,sinc = torch.cos(norm), torch.sinc(norm / (0.5*TAU))
+	qv = w*sinc[...,None]
+	return torch.stack([ qw, qv[...,0], qv[...,1], qv[...,2] ], dim=-1)
+
 def skewsym(omega:np.ndarray) -> np.ndarray:
 	x,y,z = omega[0],omega[1],omega[2]
 	return np.asarray([
