@@ -4,6 +4,7 @@ import torch
 import torch.utils.cpp_extension as cpp
 
 MY_PATH = os.path.dirname(os.path.abspath(__file__))
+GLM_INCLUDE_DIR = MY_PATH + '/glm'
 
 _C = cpp.load('gaussian_utils_cpp',
 	[
@@ -11,8 +12,8 @@ _C = cpp.load('gaussian_utils_cpp',
 		f'{MY_PATH}/rotscale3d.cu',
 		f'{MY_PATH}/nearest3d.cu',
 	],
-	extra_cflags=[ '-std=gnu++17', '-O2', '-Wall', f'-I{MY_PATH}' ],
-	extra_cuda_cflags=[ '-O2', f'-I{MY_PATH}' ],
+	extra_cflags=[ '-std=gnu++17', '-O2', '-Wall', f'-I{GLM_INCLUDE_DIR}' ],
+	extra_cuda_cflags=[ '-O2', f'-I{GLM_INCLUDE_DIR}' ],
 )
 
 #------------------------------------------------------------------------------

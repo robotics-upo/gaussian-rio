@@ -1,0 +1,3 @@
+[submodule "gaussian_utils/glm"]
+	path = gaussian_utils/glm
+	url = https://github.com/g-truc/glm

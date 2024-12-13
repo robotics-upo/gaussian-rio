@@ -1,7 +1,6 @@
 .*/
 backup*/
 __pycache__/
-glm/
 *~
 *.bin
 *.npy
