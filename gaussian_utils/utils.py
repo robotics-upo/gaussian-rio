@@ -18,12 +18,6 @@ class GradientDescentParams:
 	patience       :int
 
 @dataclass
-class RobotModelParams:
-	init_vel_std :float
-	accel_std    :float
-	angvel_std   :float
-
-@dataclass
 class RobotModelParams3D:
 	init_vel_std :float
 	xy_accel_std :float
@@ -109,34 +103,6 @@ def quat_to_mat(q: np.ndarray) -> np.ndarray:
 
 	return np.stack(tuple(np.stack(row, axis=-1) for row in mat), axis=-2)
 
-def mat_to_zrot_normal(mat: np.ndarray):
-	xlate = mat[...,0:3,3]
-	normals = mat[...,0:3,2]
-	normals = normals[...,0:2] / normals[...,2,None]
-	zrot = np.arctan2(mat[...,1,0], mat[...,0,0])
-	return xlate, zrot, normals
-
-def nzrot_to_mat(nzrot: torch.Tensor):
-	z_axis = torch.nn.functional.pad(nzrot[...,0:2], (0, 1), value=1.0)[...,None,:]
-	z_axis = z_axis / torch.linalg.norm(z_axis, dim=-1)[...,None]
-
-	r_angle = nzrot[...,2]
-	r_cos = torch.cos(r_angle)
-	r_sin = -torch.sin(r_angle) # Transpose
-	r_zero = torch.zeros_like(r_cos)
-	x_axis = torch.stack([r_cos, r_sin, r_zero], dim=-1)[...,None,:]
-
-	y_axis = torch.linalg.cross(z_axis, x_axis)
-	x_axis = torch.linalg.cross(y_axis, z_axis)
-
-	return torch.concat([x_axis, y_axis, z_axis], dim=-2)
-
-def quat_to_z(quat: np.ndarray):
-	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
-	siny_cosp = 2*(qw*qz + qx*qy)
-	cosy_cosp = 1 - 2*(qy*qy + qz*qz)
-	return np.arctan2(siny_cosp, cosy_cosp)
-
 def quat_to_rpy(quat: np.ndarray):
 	qw,qx,qy,qz = quat[...,0], quat[...,1], quat[...,2], quat[...,3]
 
@@ -207,6 +173,20 @@ def skewsym(omega:np.ndarray) -> np.ndarray:
 		[ +z, 0.0, -x ],
 		[ -y, +x, 0.0 ],
 	], dtype=omega.dtype)
+
+def angvel_from_quats(q0:np.ndarray, q1:np.ndarray, tdiff:float):
+	qdiff = quat_mult(q1, quat_conj(q0))
+	return (qdiff[1:4] / qdiff[0]) * 2 / tdiff
+
+def angvel_frame(omega:np.ndarray) -> np.ndarray:
+	C = skewsym(omega)
+	alpha = np.linalg.norm(omega)
+	I = np.eye(3, dtype=omega.dtype)
+	if alpha < 1e-4:
+		ret = I + C
+		return ret / np.linalg.det(ret)
+
+	return I + np.sin(alpha)/alpha*C + (1 - np.cos(alpha))/(alpha**2)*(C @ C)
 
 def crop_cloud(cl: np.ndarray, mindist:float=1.5, maxdist:float=30.0):
 	cldist = np.linalg.norm(cl[:,0:2], axis=1)

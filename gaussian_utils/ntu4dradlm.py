@@ -110,5 +110,5 @@ def load_ntu4dradlm_seq(basedir, seqid) -> Iterator[RadarData]:
 					img = CvBridge().compressed_imgmsg_to_cv2(last_image, desired_encoding='rgb8') if last_image is not None else None
 					yield RadarData(t=t, scan=cl, imu=imu_accum, img=img)
 					imu_accum = []
-				elif topic == CAM_TOPIC:
-					last_image = msg
+				#elif topic == CAM_TOPIC:
+				#	last_image = msg
