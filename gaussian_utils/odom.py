@@ -233,6 +233,8 @@ class ImuRadarGaussianOdometry(ImuRadarOdometry, ICloudTransformer):
 
 		swarm = self.rng.normal(size=(self.num_particles, 6))
 		swarm = torch.as_tensor(swarm, dtype=torch.float32, device='cuda')
+		if self.num_particles <= 1:
+			swarm[:,:] = 0
 
 		best_particles, best_L, best_pid = self.kf_model.register(cl, swarm, self)
 		L = float(best_L[best_pid]) - self.kf_loss
