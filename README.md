@@ -1,6 +1,6 @@
 # 4D Radar-Inertial Odometry based on Gaussian Modeling and Multi-Hypothesis Scan Matching
 
-[\[Preprint (arXiv)\]](http://arxiv.org/abs/----.-----)
+[\[Preprint (arXiv)\]](http://arxiv.org/abs/2412.13639)
 
 ## Requirements
 
@@ -59,7 +59,7 @@ The following placeholders are supported in filename patterns:
 	author = {Fernando Amodeo and Luis Merino and Fernando Caballero},
 	title = {4D Radar-Inertial Odometry based on Gaussian Modeling and Multi-Hypothesis Scan Matching},
 	year = {2024},
-	eprint = {arXiv:----.-----},
+	eprint = {arXiv:2412.13639},
 }
 ```
 
