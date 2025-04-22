@@ -240,7 +240,7 @@ std::tuple<torch::Tensor, torch::Tensor> indexedTransform3D_Backward(torch::Tens
 
 	auto options = torch::TensorOptions(torch::kFloat32).device(torch::Device(torch::kCUDA));
 	auto out_dL_dpoints   = torch::empty({ N_points,    3    }, options);
-	auto out_dL_dmatrices = torch::zeros({ N_gaussians, 3, 3 }, options);
+	auto out_dL_dmatrices = torch::empty({ N_points, 3, 3 }, options);
 
 	gaussian_utils::indexedTransform3D_Backward(N_points,
 		grad.mutable_data_ptr<float>(),

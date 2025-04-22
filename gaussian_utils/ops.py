@@ -58,7 +58,12 @@ class _NearestCenter3d(torch.autograd.Function):
 	@staticmethod
 	def backward(ctx, grad_vectors, grad_indices):
 		(indices,) = ctx.saved_tensors
-		return _C.nearest_center_3d_backward(ctx.N_centers, grad_vectors, indices)
+		idx_scatter = indices[:,None].expand(-1,3)
+		grad_points = grad_vectors
+		grad_centers = torch.zeros((ctx.N_centers, 3), dtype=torch.float32, device='cuda')
+		grad_centers.scatter_add_(0, idx_scatter, -grad_vectors)
+
+		return grad_points, grad_centers
 
 def nearest_center_3d(points: torch.Tensor, centers: torch.Tensor):
 	return _NearestCenter3d.apply(points, centers)
@@ -103,7 +108,10 @@ class _IndexedTransform3d(torch.autograd.Function):
 	@staticmethod
 	def backward(ctx, grad):
 		points,matrices,indices = ctx.saved_tensors
-		return _C.indexed_transform_3d_backward(grad,points,matrices,indices) + (None,)
+		grad_points, grad_mats_raw = _C.indexed_transform_3d_backward(grad,points,matrices,indices)
+		grad_mats = torch.zeros((matrices.shape[0], 3, 3), dtype=torch.float32, device='cuda')
+		grad_mats.scatter_add_(0, indices[:,None,None].expand(-1,3,3), grad_mats_raw)
+		return grad_points, grad_mats, None
 
 def indexed_transform_3d(points: torch.Tensor, matrices: torch.Tensor, indices: torch.Tensor):
 	return _IndexedTransform3d.apply(points, matrices, indices)

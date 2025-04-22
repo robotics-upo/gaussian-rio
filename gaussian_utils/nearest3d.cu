@@ -253,7 +253,7 @@ namespace {
 		auto& dL_dout = in_dL_doutpoints[point_idx];
 		auto& point = saved_inpoints[point_idx];
 		auto& matrix_transpose = saved_matrices[saved_indices[point_idx]];
-		auto& dL_dmatrix = out_dL_dmatrices[saved_indices[point_idx]];
+		auto& dL_dmatrix = out_dL_dmatrices[point_idx];
 
 		out_dL_dinpoints[point_idx] = matrix_transpose * dL_dout;
 
@@ -263,7 +263,7 @@ namespace {
 				// In essence, this is element (first*3 + second) in memory.
 				// We consider the first index to be the rows, ignoring glm's convention.
 				// Therefore this code is correct.
-				atomicAdd(&dL_dmatrix[row][col], dL_dout[row] * point[col]);
+				dL_dmatrix[row][col] = dL_dout[row] * point[col];
 			}
 		}
 
