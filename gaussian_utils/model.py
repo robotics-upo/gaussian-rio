@@ -140,23 +140,17 @@ class GaussianModel:
 				cl_tran, cl_gidx = nearest_center_3d(cloud, g_centers)
 				cl_xfrm = indexed_transform_3d(cl_tran, g_invmats, cl_gidx)
 				cl_mahal2 = (cl_xfrm*cl_xfrm).sum(dim=-1)
-				#cl_mahal2, cl_gidx = nearest_gaussian_3d(cloud, g_centers, g_invmats)
 
 				g_mahal2 = torch.zeros((len(g_centers),), dtype=torch.float32, device='cuda')
 				g_mahal2.scatter_reduce_(0, cl_gidx, cl_mahal2, reduce='mean')
 
-				L1 = 0.5*g_mahal2 + torch.sum(g_reallogscale, dim=1)
-				L2 = torch.nn.functional.relu(torch.min(g_reallogscale, axis=1)[0] - self.log_disc_thickness)
-				L = torch.mean(L1 + L2)
-
-				#print(f'Epoch {1+epoch} L={float(L):.4f}')
+				L = torch.mean(0.5*g_mahal2 + torch.sum(g_reallogscale, dim=1))
 
 				if best_epoch is None or best_loss > float(L) + self._fit.min_improvement:
 					best_epoch = epoch
 					best_loss = float(L)
 					best_weights = (g_centers.detach().clone(), g_log_scales.detach().clone(), g_quats.detach().clone())
 				elif (epoch - best_epoch) > self._fit.patience:
-					#print('Early stopping')
 					break
 
 				opt.zero_grad()
