@@ -65,4 +65,6 @@ The following placeholders are supported in filename patterns:
 
 ## Acknowledgements
 
+![Logos](minci.png)
+
 This work was partially supported by the following grants: 1) INSERTION PID2021-127648OB-C31, and 2) NORDIC TED2021-132476B-I00 projects, funded by MCIN/AEI/ 10.13039/501100011033 and the "European Union NextGenerationEU / PRTR".
