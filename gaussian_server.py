@@ -1,5 +1,6 @@
 import os
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ":4096:8"
+os.environ['OMP_NUM_THREADS'] = '1'
 
 import struct
 import random
